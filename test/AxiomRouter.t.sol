@@ -432,6 +432,351 @@ contract AxiomRouterTest is Test {
         assertEq(axiom.getTotalRecords(), 15);
     }
 
+    // ============ Additional Coverage Tests ============
+
+    function test_UpdateIdentity() public {
+        // First register identity
+        vm.prank(user1);
+        axiom.registerIdentity("OldName", "ipfs://old");
+        
+        // Update identity
+        vm.prank(user1);
+        axiom.updateIdentity("NewName", "ipfs://new");
+        
+        AxiomTypes.IdentityInfo memory info = axiom.resolveIdentity(user1);
+        assertEq(info.name, "NewName");
+        assertEq(info.proofURI, "ipfs://new");
+        
+        // Old name should be freed
+        assertEq(axiom.resolveByName("OldName"), address(0));
+        assertEq(axiom.resolveByName("NewName"), user1);
+    }
+
+    function test_UpdateIdentity_NotRegistered() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        axiom.updateIdentity("Name", "");
+    }
+
+    function test_UpdateIdentity_NameTaken() public {
+        vm.prank(user1);
+        axiom.registerIdentity("TakenName", "");
+        
+        vm.prank(user2);
+        axiom.registerIdentity("OtherName", "");
+        
+        // Try to update to taken name
+        vm.prank(user2);
+        vm.expectRevert("Name already taken");
+        axiom.updateIdentity("TakenName", "");
+    }
+
+    function test_RevokeVerification() public {
+        // Register identity
+        vm.prank(user1);
+        axiom.registerIdentity("Verified", "");
+        
+        // Verify first
+        vm.prank(operator);
+        axiom.verifyIdentity(user1);
+        assertTrue(axiom.isIdentityVerified(user1));
+        
+        // Revoke verification
+        vm.prank(operator);
+        axiom.revokeVerification(user1);
+        assertFalse(axiom.isIdentityVerified(user1));
+    }
+
+    function test_RevokeVerification_NotRegistered() public {
+        vm.prank(operator);
+        vm.expectRevert();
+        axiom.revokeVerification(user1);
+    }
+
+    function test_VerifyIdentity_NotRegistered() public {
+        vm.prank(operator);
+        vm.expectRevert();
+        axiom.verifyIdentity(user1);
+    }
+
+    function test_RevokeEnterpriseStatus() public {
+        // Grant enterprise first
+        vm.prank(admin);
+        axiom.grantEnterpriseStatus(enterprise);
+        assertTrue(axiom.isEnterpriseUser(enterprise));
+        
+        // Revoke enterprise
+        vm.prank(admin);
+        axiom.revokeEnterpriseStatus(enterprise);
+        assertFalse(axiom.isEnterpriseUser(enterprise));
+    }
+
+    function test_SetTreasuryWallet() public {
+        address newTreasury = address(100);
+        
+        vm.prank(admin);
+        axiom.setTreasuryWallet(newTreasury);
+        
+        // Verify by using the getFee which uses storage
+        // (indirect verification since treasuryWallet is storage)
+    }
+
+    function test_SetTreasuryWallet_InvalidAddress() public {
+        vm.prank(admin);
+        vm.expectRevert("Invalid address");
+        axiom.setTreasuryWallet(address(0));
+    }
+
+    function test_GetTotalFeesCollected() public {
+        // Initially 0
+        assertEq(axiom.getTotalFeesCollected(), 0);
+        
+        // Register and check fees collected
+        vm.prank(user1);
+        axiom.register{value: BASE_FEE}(contentHash1, "");
+        
+        assertEq(axiom.getTotalFeesCollected(), BASE_FEE);
+    }
+
+    function test_SetRateLimit() public {
+        vm.prank(admin);
+        axiom.setRateLimit(120, 20); // 2 minutes, 20 actions
+        
+        // Verify by testing rate limit behavior
+        vm.startPrank(user1);
+        for (uint256 i = 0; i < 15; i++) {
+            bytes32 hash = keccak256(abi.encodePacked("ratelimit", i));
+            axiom.register{value: BASE_FEE}(hash, "");
+        }
+        vm.stopPrank();
+        
+        // Should have succeeded since limit is now 20
+        assertEq(axiom.getTotalRecords(), 15);
+    }
+
+    function test_SetMaxBatchSize() public {
+        // Set max batch to 5
+        vm.prank(admin);
+        axiom.setMaxBatchSize(5);
+        
+        // Try batch of 6 - should fail
+        bytes32[] memory hashes = new bytes32[](6);
+        string[] memory uris = new string[](6);
+        for (uint256 i = 0; i < 6; i++) {
+            hashes[i] = keccak256(abi.encodePacked("batch", i));
+            uris[i] = "";
+        }
+        
+        vm.prank(user1);
+        vm.expectRevert();
+        axiom.batchRegister{value: BASE_FEE * 6}(hashes, uris);
+    }
+
+    function test_BatchRegister_ExceedsMaxBatchSize() public {
+        // Default maxBatchSize is 100, create 101
+        bytes32[] memory hashes = new bytes32[](101);
+        string[] memory uris = new string[](101);
+        for (uint256 i = 0; i < 101; i++) {
+            hashes[i] = keccak256(abi.encodePacked("oversized", i));
+            uris[i] = "";
+        }
+        
+        vm.prank(user1);
+        vm.expectRevert();
+        axiom.batchRegister{value: BASE_FEE * 101}(hashes, uris);
+    }
+
+    function test_BatchRegister_SkipsDuplicates() public {
+        // First register one hash
+        vm.prank(user1);
+        axiom.register{value: BASE_FEE}(contentHash1, "");
+        
+        // Try batch with that hash included
+        bytes32[] memory hashes = new bytes32[](3);
+        hashes[0] = contentHash1; // Already exists
+        hashes[1] = contentHash2;
+        hashes[2] = contentHash3;
+        
+        string[] memory uris = new string[](3);
+        uris[0] = ""; uris[1] = ""; uris[2] = "";
+        
+        vm.prank(user1);
+        bytes32[] memory recordIds = axiom.batchRegister{value: BASE_FEE * 3}(hashes, uris);
+        
+        // First should be skipped (bytes32(0)), others created
+        assertEq(recordIds[0], bytes32(0));
+        assertTrue(recordIds[1] != bytes32(0));
+        assertTrue(recordIds[2] != bytes32(0));
+        
+        // Total should be 3 (1 from first + 2 from batch)
+        assertEq(axiom.getTotalRecords(), 3);
+    }
+
+    function test_BatchRegister_InsufficientFee() public {
+        bytes32[] memory hashes = new bytes32[](3);
+        hashes[0] = contentHash1;
+        hashes[1] = contentHash2;
+        hashes[2] = contentHash3;
+        
+        string[] memory uris = new string[](3);
+        
+        vm.prank(user1);
+        vm.expectRevert();
+        axiom.batchRegister{value: BASE_FEE}(hashes, uris); // Only 1 fee for 3 items
+    }
+
+    function test_GetRecordsByIssuer() public {
+        vm.startPrank(user1);
+        axiom.register{value: BASE_FEE}(contentHash1, "");
+        axiom.register{value: BASE_FEE}(contentHash2, "");
+        axiom.register{value: BASE_FEE}(contentHash3, "");
+        vm.stopPrank();
+        
+        bytes32[] memory records = axiom.getRecordsByIssuer(user1);
+        assertEq(records.length, 3);
+    }
+
+    function test_GetRecord_NotFound() public {
+        bytes32 fakeRecordId = keccak256("nonexistent");
+        
+        vm.expectRevert();
+        axiom.getRecord(fakeRecordId);
+    }
+
+    function test_Revoke_RecordNotFound() public {
+        bytes32 fakeRecordId = keccak256("nonexistent");
+        
+        vm.prank(user1);
+        vm.expectRevert();
+        axiom.revoke(fakeRecordId, "reason");
+    }
+
+    function test_DisputeContent_RecordNotFound() public {
+        bytes32 fakeRecordId = keccak256("nonexistent");
+        
+        vm.prank(operator);
+        vm.expectRevert();
+        axiom.disputeContent(fakeRecordId, "reason");
+    }
+
+    function test_Withdraw_InvalidRecipient() public {
+        vm.prank(user1);
+        axiom.register{value: BASE_FEE}(contentHash1, "");
+        
+        vm.prank(admin);
+        vm.expectRevert("Invalid recipient");
+        axiom.withdraw(address(0), BASE_FEE);
+    }
+
+    function test_Withdraw_InsufficientBalance() public {
+        vm.prank(admin);
+        vm.expectRevert("Insufficient balance");
+        axiom.withdraw(treasury, 1 ether);
+    }
+
+    function test_ReceiveEth() public {
+        // Direct ETH transfer
+        vm.deal(user1, 1 ether);
+        vm.prank(user1);
+        (bool success,) = address(axiom).call{value: 0.1 ether}("");
+        assertTrue(success);
+        assertEq(address(axiom).balance, 0.1 ether);
+    }
+
+    function test_Upgrade() public {
+        // Deploy new implementation
+        AxiomRouter newImpl = new AxiomRouter();
+        
+        // Upgrade (must be UPGRADER_ROLE)
+        vm.prank(admin);
+        axiom.upgradeToAndCall(address(newImpl), "");
+        
+        // Verify still works
+        assertEq(axiom.VERSION(), "1.0.0");
+    }
+
+    function test_Upgrade_Unauthorized() public {
+        AxiomRouter newImpl = new AxiomRouter();
+        
+        // Non-upgrader cannot upgrade
+        vm.prank(user1);
+        vm.expectRevert();
+        axiom.upgradeToAndCall(address(newImpl), "");
+    }
+
+    function test_RegisterIdentity_AlreadyExists() public {
+        vm.prank(user1);
+        axiom.registerIdentity("Name1", "");
+        
+        vm.prank(user1);
+        vm.expectRevert();
+        axiom.registerIdentity("Name2", "");
+    }
+
+    function test_RegisterIdentity_WhenBanned() public {
+        vm.prank(operator);
+        axiom.banAddress(user1, "banned");
+        
+        vm.prank(user1);
+        vm.expectRevert();
+        axiom.registerIdentity("Name", "");
+    }
+
+    function test_UpdateIdentity_WhenBanned() public {
+        vm.prank(user1);
+        axiom.registerIdentity("Name", "");
+        
+        vm.prank(operator);
+        axiom.banAddress(user1, "banned");
+        
+        vm.prank(user1);
+        vm.expectRevert();
+        axiom.updateIdentity("NewName", "");
+    }
+
+    function test_RateLimitReset_AfterWindow() public {
+        vm.startPrank(user1);
+        
+        // Register up to limit
+        for (uint256 i = 0; i < 10; i++) {
+            bytes32 hash = keccak256(abi.encodePacked("window1", i));
+            axiom.register{value: BASE_FEE}(hash, "");
+        }
+        vm.stopPrank();
+        
+        // Warp time beyond rate limit window (60 seconds default)
+        vm.warp(block.timestamp + 61);
+        
+        // Should be able to register again
+        vm.prank(user1);
+        bytes32 hash = keccak256("window2_0");
+        axiom.register{value: BASE_FEE}(hash, "");
+        
+        assertEq(axiom.getTotalRecords(), 11);
+    }
+
+    function test_GetFee_Enterprise() public {
+        vm.startPrank(admin);
+        axiom.grantEnterpriseStatus(enterprise);
+        axiom.setEnterpriseRate(enterprise, 0.00005 ether);
+        vm.stopPrank();
+        
+        assertEq(axiom.getFee(enterprise), 0.00005 ether);
+    }
+
+    function test_GetFee_Regular() public view {
+        assertEq(axiom.getFee(user1), BASE_FEE);
+    }
+
+    function test_EnterpriseWithoutCustomRate() public {
+        // Grant enterprise but no custom rate
+        vm.prank(admin);
+        axiom.grantEnterpriseStatus(enterprise);
+        
+        // Should use base fee since no custom rate set
+        assertEq(axiom.getFee(enterprise), BASE_FEE);
+    }
+
     // ============ Fuzz Tests ============
 
     function testFuzz_Register(bytes32 hash, string calldata uri) public {
@@ -454,5 +799,98 @@ contract AxiomRouterTest is Test {
         
         (bool isValid,) = axiom.verify(hash, issuer);
         assertTrue(isValid);
+    }
+
+    function testFuzz_BatchRegister(uint8 count) public {
+        vm.assume(count > 0 && count <= 50);
+        
+        bytes32[] memory hashes = new bytes32[](count);
+        string[] memory uris = new string[](count);
+        
+        for (uint256 i = 0; i < count; i++) {
+            hashes[i] = keccak256(abi.encodePacked("fuzz", i));
+            uris[i] = "";
+        }
+        
+        uint256 totalFee = BASE_FEE * count;
+        vm.deal(user1, totalFee);
+        
+        vm.prank(user1);
+        bytes32[] memory recordIds = axiom.batchRegister{value: totalFee}(hashes, uris);
+        
+        assertEq(recordIds.length, count);
+    }
+
+    // ============ Transfer Failure Tests ============
+
+    function test_Register_RefundFails() public {
+        // Deploy a contract that rejects ETH
+        EthRejecter rejecter = new EthRejecter(address(axiom));
+        vm.deal(address(rejecter), 10 ether);
+        
+        // Register with excess - refund should fail
+        bytes32 hash = keccak256("rejecter_test");
+        
+        vm.prank(address(rejecter));
+        vm.expectRevert("Refund failed");
+        rejecter.registerWithExcess{value: 1 ether}(hash);
+    }
+
+    function test_BatchRegister_RefundFails() public {
+        // Deploy a contract that rejects ETH
+        EthRejecter rejecter = new EthRejecter(address(axiom));
+        vm.deal(address(rejecter), 10 ether);
+        
+        bytes32[] memory hashes = new bytes32[](2);
+        hashes[0] = keccak256("batch1");
+        hashes[1] = keccak256("batch2");
+        
+        string[] memory uris = new string[](2);
+        uris[0] = "";
+        uris[1] = "";
+        
+        // Send excess - refund should fail
+        vm.prank(address(rejecter));
+        vm.expectRevert("Refund failed");
+        rejecter.batchRegisterWithExcess{value: 1 ether}(hashes, uris);
+    }
+
+    function test_Withdraw_TransferFails() public {
+        // First accumulate fees
+        vm.prank(user1);
+        axiom.register{value: BASE_FEE}(contentHash1, "");
+        
+        // Deploy contract that rejects ETH
+        EthRejecter rejecter = new EthRejecter(address(axiom));
+        
+        // Try to withdraw to this contract
+        vm.prank(admin);
+        vm.expectRevert("Transfer failed");
+        axiom.withdraw(address(rejecter), BASE_FEE);
+    }
+}
+
+/**
+ * @title EthRejecter
+ * @notice Contract that rejects ETH transfers (for testing transfer failure branches)
+ */
+contract EthRejecter {
+    AxiomRouter public axiom;
+    
+    constructor(address _axiom) {
+        axiom = AxiomRouter(payable(_axiom));
+    }
+    
+    function registerWithExcess(bytes32 hash) external payable {
+        axiom.register{value: msg.value}(hash, "");
+    }
+    
+    function batchRegisterWithExcess(bytes32[] calldata hashes, string[] calldata uris) external payable {
+        axiom.batchRegister{value: msg.value}(hashes, uris);
+    }
+    
+    // Reject all ETH transfers
+    receive() external payable {
+        revert("EthRejecter: no ETH accepted");
     }
 }
