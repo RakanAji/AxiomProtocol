@@ -87,7 +87,11 @@ library AxiomStorage {
         uint256 protocolVersion;
         
         /// @notice Whether the protocol is paused
+        /// @notice Whether the protocol is paused
         bool paused;
+        
+        /// @notice Address of the AxiomModuleHub (v2 upgrade)
+        address moduleHub;
     }
 
     // ============ Storage Access ============
