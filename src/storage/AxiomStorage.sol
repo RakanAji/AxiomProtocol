@@ -111,6 +111,70 @@ library AxiomStorage {
         /// @notice Maps recordId to V2 AxiomRecord (enhanced with C2PA/license fields)
         /// @dev V1 `records` mapping is preserved; new registrations use recordsV2
         mapping(bytes32 => AxiomTypesV2.AxiomRecord) recordsV2;
+
+        // ============ V3 License NFT State (ERC-721 Manual Implementation) ============
+        
+        /// @notice Auto-incrementing token ID counter
+        uint256 nextTokenId;
+        
+        /// @notice Auto-incrementing license template ID counter  
+        uint256 nextLicenseId;
+        
+        /// @notice Maps token ID to owner address (ERC-721 core)
+        mapping(uint256 => address) tokenOwner;
+        
+        /// @notice Maps owner to token count (ERC-721 balanceOf)
+        mapping(address => uint256) tokenBalance;
+        
+        /// @notice Maps token ID to approved address (ERC-721 approval)
+        mapping(uint256 => address) tokenApprovals;
+        
+        /// @notice Maps owner to operator approvals (ERC-721 operatorApprovals)
+        mapping(address => mapping(address => bool)) operatorApprovals;
+        
+        /// @notice Maps token ID to license purchase data
+        mapping(uint256 => AxiomTypesV2.LicensePurchase) tokenLicenseData;
+        
+        /// @notice Maps license template ID to License struct
+        mapping(uint256 => AxiomTypesV2.License) licenses;
+        
+        /// @notice Maps record ID to array of license template IDs
+        mapping(bytes32 => uint256[]) recordLicenses;
+        
+        /// @notice Maps record ID to royalty split configuration
+        mapping(bytes32 => AxiomTypesV2.RoyaltySplit) royaltySplits;
+        
+        /// @notice Treasury address for protocol license fees
+        address licenseTreasury;
+
+        // ============ V3 Dispute Resolution State ============
+        
+        /// @notice Auto-incrementing dispute counter
+        uint256 totalDisputes;
+        
+        /// @notice Maps dispute ID to Dispute struct
+        mapping(bytes32 => AxiomTypesV2.Dispute) disputes;
+        
+        /// @notice Maps record ID to array of dispute IDs
+        mapping(bytes32 => bytes32[]) recordDisputes;
+        
+        /// @notice Maps challenger address to array of dispute IDs  
+        mapping(address => bytes32[]) challengerDisputes;
+        
+        /// @notice Maps arbitrator address to approval status
+        mapping(address => bool) approvedArbitrators;
+        
+        /// @notice Array of approved arbitrator addresses
+        address[] arbitratorList;
+        
+        /// @notice Staking configuration for disputes
+        AxiomTypesV2.StakeConfig stakeConfig;
+        
+        /// @notice Maps external arbitrator address + external dispute ID to internal dispute ID
+        mapping(address => mapping(uint256 => bytes32)) externalDisputeMapping;
+        
+        /// @notice Reentrancy guard for Facets (1 = not entered, 2 = entered)
+        uint256 reentrancyStatus;
     }
 
     // ============ Storage Access ============

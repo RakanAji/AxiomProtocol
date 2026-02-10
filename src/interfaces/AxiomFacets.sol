@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {AxiomTypes} from "../libraries/AxiomTypes.sol";
+import {AxiomTypesV2} from "../libraries/AxiomTypesV2.sol";
 
 /**
  * @title AxiomFacets
@@ -47,5 +48,61 @@ interface AxiomFacets {
     function disputeContent(bytes32 _recordId, string calldata _reason) external;
     function setRateLimit(uint256 _window, uint256 _maxActions) external;
     function setMaxBatchSize(uint256 _size) external;
+    
+    // ============ AxiomLicenseFacet Functions (ERC-721 + Licensing) ============
+    function createLicense(
+        bytes32 _recordId,
+        AxiomTypesV2.LicenseType _licenseType,
+        uint256 _price,
+        address _paymentToken,
+        uint16 _royaltyBps,
+        uint40 _validUntil,
+        bool _exclusive,
+        bool _sublicensable,
+        string calldata _customTermsURI
+    ) external returns (uint256);
+    function updateLicense(uint256 _licenseId, uint256 _price, uint40 _validUntil, bool _exclusive) external;
+    function deactivateLicense(uint256 _licenseId) external;
+    function purchaseLicense(uint256 _licenseId, uint40 _duration) external payable returns (uint256);
+    function purchaseLicenseFor(uint256 _licenseId, address _recipient, uint40 _duration) external payable returns (uint256);
+    
+    // ERC-721 Functions
+    function balanceOf(address owner) external view returns (uint256);
+    function ownerOf(uint256 tokenId) external view returns (address);
+    function transferFrom(address from, address to, uint256 tokenId) external;
+    function safeTransferFrom(address from, address to, uint256 tokenId) external;
+    function approve(address to, uint256 tokenId) external;
+    function setApprovalForAll(address operator, bool approved) external;
+    function getApproved(uint256 tokenId) external view returns (address);
+    function isApprovedForAll(address owner, address operator) external view returns (bool);
+    function name() external pure returns (string memory);
+    function symbol() external pure returns (string memory);
+    function tokenURI(uint256 tokenId) external view returns (string memory);
+    
+    // ERC-2981 + Royalty Functions
+    function royaltyInfo(uint256 tokenId, uint256 salePrice) external view returns (address, uint256);
+    function setRoyaltySplit(bytes32 _recordId, address[] calldata _recipients, uint16[] calldata _shares) external;
+    
+    // ============ AxiomDisputeFacet Functions ============
+    function initiateDispute(
+        bytes32 _recordId,
+        AxiomTypesV2.DisputeReason _reason,
+        string calldata _evidenceURI
+    ) external payable returns (bytes32);
+    function initiateDisputeWithToken(
+        bytes32 _recordId,
+        AxiomTypesV2.DisputeReason _reason,
+        string calldata _evidenceURI,
+        address _stakeToken,
+        uint256 _stakeAmount
+    ) external returns (bytes32);
+    function respondToDispute(bytes32 _disputeId, string calldata _responseURI) external;
+    function submitEvidence(bytes32 _disputeId, string calldata _evidenceURI) external;
+    function escalateToArbitration(bytes32 _disputeId, address _arbitrator) external payable;
+    function resolveByTimeout(bytes32 _disputeId) external;
+    function claimStake(bytes32 _disputeId) external returns (uint256);
+    function getDispute(bytes32 _disputeId) external view returns (AxiomTypesV2.Dispute memory);
+    function getDisputesByRecord(bytes32 _recordId) external view returns (bytes32[] memory);
+    function hasActiveDispute(bytes32 _recordId) external view returns (bool);
 }
 
