@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {IAxiomDID} from "../interfaces/IAxiomDID.sol";
 import {AxiomTypesV2} from "../libraries/AxiomTypesV2.sol";
@@ -13,22 +11,22 @@ import {AxiomTypesV2} from "../libraries/AxiomTypesV2.sol";
 /**
  * @title AxiomDIDRegistry
  * @author Axiom Protocol Team
- * @notice Decentralized Identifier (DID) Registry following W3C DID Core and ERC-1056 standards
- * @dev This contract manages:
+ * @notice Diamond Facet for Decentralized Identifier (DID) management
+ * @dev V3: Converted to stateless facet. Executes via delegatecall from AxiomRouter.
+ *      
+ *      W3C DID Core and ERC-1056 standards compliance:
  *      - DID registration and resolution
  *      - Delegate authorization for signing
  *      - Verification levels (NONE → GOVERNMENT)
  *      - Attribute management (ERC-1056 compatible)
  *
- *      Storage Pattern: Uses Diamond Storage for upgradeability
- *      Access Control: VERIFIER_ROLE for setting verification levels
+ *      Storage Pattern: Uses Diamond Storage with separate DID_STORAGE_SLOT
+ *      (does not collide with AXIOM_STORAGE_POSITION)
+ *      
+ *      Access Control: Checks Router's AccessControl via delegatecall context
+ *      (VERIFIER_ROLE is stored in Router's AccessControlUpgradeable storage)
  */
-contract AxiomDIDRegistry is 
-    Initializable, 
-    AccessControlUpgradeable, 
-    UUPSUpgradeable,
-    IAxiomDID 
-{
+contract AxiomDIDRegistry is IAxiomDID {
     using ECDSA for bytes32;
     using MessageHashUtils for bytes32;
 
@@ -39,7 +37,7 @@ contract AxiomDIDRegistry is
     /// @notice Role for identity verifiers (KYC/KYB providers)
     bytes32 public constant VERIFIER_ROLE = keccak256("VERIFIER_ROLE");
     
-    /// @notice Role for contract upgraders
+    /// @notice Role for contract upgraders (defined in Router)
     bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
 
     /// @notice Standard delegate type for signature authorization
@@ -98,24 +96,27 @@ contract AxiomDIDRegistry is
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //                            INITIALIZER
+    //                          ACCESS CONTROL HELPERS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
-        _disableInitializers();
+    /**
+     * @dev Check if caller has a specific role
+     * @notice Reads from Router's AccessControlUpgradeable storage via delegatecall
+     *         The Router inherits AccessControlUpgradeable, and under delegatecall,
+     *         we execute in Router's storage context, so we can access its roles.
+     */
+    function _hasRole(bytes32 role, address account) internal view returns (bool) {
+        // When called via delegatecall, 'this' is the Router proxy address
+        // We can directly call hasRole on the Router's AccessControl
+        return IAccessControl(address(this)).hasRole(role, account);
     }
 
     /**
-     * @notice Initialize the DID Registry
-     * @param _admin Admin address with DEFAULT_ADMIN_ROLE
+     * @dev Require caller has a specific role
      */
-    function initialize(address _admin) external initializer {
-        __AccessControl_init();
-
-        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-        _grantRole(VERIFIER_ROLE, _admin);
-        _grantRole(UPGRADER_ROLE, _admin);
+    modifier onlyRole(bytes32 role) {
+        require(_hasRole(role, msg.sender), "DIDRegistry: Missing required role");
+        _;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -640,14 +641,4 @@ contract AxiomDIDRegistry is
         DIDStorage storage s = _getDIDStorage();
         return s.changed[_identity];
     }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    //                              UUPS
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    function _authorizeUpgrade(address newImplementation) 
-        internal 
-        override 
-        onlyRole(UPGRADER_ROLE) 
-    {}
 }

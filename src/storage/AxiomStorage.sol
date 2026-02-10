@@ -2,12 +2,18 @@
 pragma solidity ^0.8.24;
 
 import {AxiomTypes} from "../libraries/AxiomTypes.sol";
+import {AxiomTypesV2} from "../libraries/AxiomTypesV2.sol";
 
 /**
  * @title AxiomStorage
  * @author Axiom Protocol Team
  * @notice Diamond storage pattern for upgradeable contracts
- * @dev All state variables are stored in a single struct at a fixed storage slot
+ * @dev All state variables are stored in a single struct at a fixed storage slot.
+ *      V3 Upgrade: Added recordsV2 mapping for AxiomTypesV2.AxiomRecord and
+ *      Diamond facet routing fields (selectorToFacet, facetAddresses).
+ *
+ *      IMPORTANT: New fields are ALWAYS appended at the end of the struct.
+ *      Never reorder or remove existing fields to preserve upgrade safety.
  */
 library AxiomStorage {
     // ============ Storage Position ============
@@ -22,9 +28,9 @@ library AxiomStorage {
      * @dev Using Diamond storage pattern for upgradeability
      */
     struct Storage {
-        // ============ Registry State ============
+        // ============ Registry State (V1 - DO NOT MODIFY) ============
         
-        /// @notice Maps recordId to AxiomRecord
+        /// @notice Maps recordId to AxiomRecord (V1 - preserved for backward compat)
         mapping(bytes32 => AxiomTypes.AxiomRecord) records;
         
         /// @notice Maps user address to their registered record IDs
@@ -36,7 +42,7 @@ library AxiomStorage {
         /// @notice Total number of registered records
         uint256 totalRecords;
 
-        // ============ Identity State ============
+        // ============ Identity State (V1 - DO NOT MODIFY) ============
         
         /// @notice Maps address to identity information
         mapping(address => AxiomTypes.IdentityInfo) identities;
@@ -44,7 +50,7 @@ library AxiomStorage {
         /// @notice Maps name hash to address (reverse lookup)
         mapping(bytes32 => address) nameToAddress;
 
-        // ============ Access Control State ============
+        // ============ Access Control State (V1 - DO NOT MODIFY) ============
         
         /// @notice Maps address to banned status
         mapping(address => bool) bannedAddresses;
@@ -61,7 +67,7 @@ library AxiomStorage {
         /// @notice Max actions per window for regular users
         uint256 maxActionsPerWindow;
 
-        // ============ Treasury State ============
+        // ============ Treasury State (V1 - DO NOT MODIFY) ============
         
         /// @notice Base fee for content registration (in wei)
         uint256 baseFee;
@@ -78,7 +84,7 @@ library AxiomStorage {
         /// @notice Total fees collected
         uint256 totalFeesCollected;
 
-        // ============ Configuration ============
+        // ============ Configuration (V1/V2 - DO NOT MODIFY) ============
         
         /// @notice Maximum batch size for batch operations
         uint256 maxBatchSize;
@@ -87,11 +93,24 @@ library AxiomStorage {
         uint256 protocolVersion;
         
         /// @notice Whether the protocol is paused
-        /// @notice Whether the protocol is paused
         bool paused;
         
         /// @notice Address of the AxiomModuleHub (v2 upgrade)
         address moduleHub;
+
+        // ============ V3 Diamond Facet Routing ============
+        
+        /// @notice Maps function selector to facet contract address
+        mapping(bytes4 => address) selectorToFacet;
+        
+        /// @notice List of all registered facet addresses
+        address[] facetAddresses;
+
+        // ============ V3 Registry State (Upgrade-safe) ============
+        
+        /// @notice Maps recordId to V2 AxiomRecord (enhanced with C2PA/license fields)
+        /// @dev V1 `records` mapping is preserved; new registrations use recordsV2
+        mapping(bytes32 => AxiomTypesV2.AxiomRecord) recordsV2;
     }
 
     // ============ Storage Access ============
@@ -124,12 +143,22 @@ library AxiomStorage {
     }
 
     /**
-     * @notice Check if a record exists
+     * @notice Check if a V1 record exists
      * @param _recordId The record ID to check
      * @return exists Whether the record exists
      */
     function recordExists(bytes32 _recordId) internal view returns (bool) {
         Storage storage s = getStorage();
         return s.records[_recordId].timestamp != 0;
+    }
+
+    /**
+     * @notice Check if a V2 record exists
+     * @param _recordId The record ID to check
+     * @return exists Whether the V2 record exists
+     */
+    function recordExistsV2(bytes32 _recordId) internal view returns (bool) {
+        Storage storage s = getStorage();
+        return s.recordsV2[_recordId].timestamp != 0;
     }
 }

@@ -6,6 +6,11 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {AxiomRouter} from "../src/AxiomRouter.sol";
 import {AxiomTypes} from "../src/libraries/AxiomTypes.sol";
 import {AxiomStorage} from "../src/storage/AxiomStorage.sol";
+import {AxiomRegistry} from "../src/core/AxiomRegistry.sol";
+import {AxiomTreasury} from "../src/core/AxiomTreasury.sol";
+import {AxiomIdentity} from "../src/core/AxiomIdentity.sol";
+import {AxiomAccess} from "../src/access/AxiomAccess.sol";
+import {AxiomFacets} from "../src/interfaces/AxiomFacets.sol";
 
 /**
  * @title AxiomRouterTest
@@ -14,6 +19,13 @@ import {AxiomStorage} from "../src/storage/AxiomStorage.sol";
 contract AxiomRouterTest is Test {
     AxiomRouter public axiom;
     AxiomRouter public axiomImpl;
+    AxiomFacets public axiomFacets; // Helper interface for facet functions
+    
+    // Facets
+    AxiomRegistry public registryFacet;
+    AxiomTreasury public treasuryFacet;
+    AxiomIdentity public identityFacet;
+    AxiomAccess public accessFacet;
     
     address public admin = address(1);
     address public treasury = address(2);
@@ -63,6 +75,69 @@ contract AxiomRouterTest is Test {
         ERC1967Proxy proxy = new ERC1967Proxy(address(axiomImpl), initData);
         axiom = AxiomRouter(payable(address(proxy)));
         
+        // Deploy facets
+        registryFacet = new AxiomRegistry();
+        treasuryFacet = new AxiomTreasury();
+        identityFacet = new AxiomIdentity();
+        accessFacet = new AxiomAccess();
+        
+        // Register facet selectors with the Diamond proxy
+        vm.startPrank(admin);
+        
+        // Register AxiomRegistry facet selectors
+        bytes4[] memory registrySelectors = new bytes4[](6);
+        registrySelectors[0] = AxiomRegistry.register.selector;
+        registrySelectors[1] = AxiomRegistry.batchRegister.selector;
+        registrySelectors[2] = AxiomRegistry.revoke.selector;
+        registrySelectors[3] = AxiomRegistry.verify.selector;
+        registrySelectors[4] = AxiomRegistry.getRecord.selector;
+        registrySelectors[5] = AxiomRegistry.getRecordsByIssuer.selector;
+        bytes4[] memory registrySelectors2 = new bytes4[](1);
+        registrySelectors2[0] = AxiomRegistry.getTotalRecords.selector;
+        axiom.addFacetSelectors(address(registryFacet), registrySelectors);
+        axiom.addFacetSelectors(address(registryFacet), registrySelectors2);
+        
+        // Register AxiomTreasury facet selectors
+        bytes4[] memory treasurySelectors = new bytes4[](8);
+        treasurySelectors[0] = AxiomTreasury.setBaseFee.selector;
+        treasurySelectors[1] = AxiomTreasury.setEnterpriseRate.selector;
+        treasurySelectors[2] = AxiomTreasury.grantEnterpriseStatus.selector;
+        treasurySelectors[3] = AxiomTreasury.revokeEnterpriseStatus.selector;
+        treasurySelectors[4] = AxiomTreasury.withdraw.selector;
+        treasurySelectors[5] = AxiomTreasury.getFee.selector;
+        treasurySelectors[6] = AxiomTreasury.getBaseFee.selector;
+        treasurySelectors[7] = AxiomTreasury.getTotalFeesCollected.selector;
+        bytes4[] memory treasurySelectors2 = new bytes4[](2);
+        treasurySelectors2[0] = AxiomTreasury.isEnterpriseUser.selector;
+        treasurySelectors2[1] = AxiomTreasury.setTreasuryWallet.selector;
+        axiom.addFacetSelectors(address(treasuryFacet), treasurySelectors);
+        axiom.addFacetSelectors(address(treasuryFacet), treasurySelectors2);
+        
+        // Register AxiomIdentity facet selectors
+        bytes4[] memory identitySelectors = new bytes4[](7);
+        identitySelectors[0] = AxiomIdentity.registerIdentity.selector;
+        identitySelectors[1] = AxiomIdentity.updateIdentity.selector;
+        identitySelectors[2] = AxiomIdentity.verifyIdentity.selector;
+        identitySelectors[3] = AxiomIdentity.revokeVerification.selector;
+        identitySelectors[4] = AxiomIdentity.resolveIdentity.selector;
+        identitySelectors[5] = AxiomIdentity.resolveByName.selector;
+        identitySelectors[6] = AxiomIdentity.isIdentityVerified.selector;
+        axiom.addFacetSelectors(address(identityFacet), identitySelectors);
+        
+        // Register AxiomAccess facet selectors  
+        bytes4[] memory accessSelectors = new bytes4[](5);
+        accessSelectors[0] = AxiomAccess.banAddress.selector;
+        accessSelectors[1] = AxiomAccess.unbanAddress.selector;
+        accessSelectors[2] = AxiomAccess.isBanned.selector;
+        accessSelectors[3] = AxiomAccess.disputeContent.selector;
+        accessSelectors[4] = AxiomAccess.setRateLimit.selector;
+        bytes4[] memory accessSelectors2 = new bytes4[](1);
+        accessSelectors2[0] = AxiomAccess.setMaxBatchSize.selector;
+        axiom.addFacetSelectors(address(accessFacet), accessSelectors);
+        axiom.addFacetSelectors(address(accessFacet), accessSelectors2);
+        
+        vm.stopPrank();
+        
         // Get the operator role bytes32 BEFORE pranking
         bytes32 operatorRole = axiom.OPERATOR_ROLE();
         
@@ -74,13 +149,16 @@ contract AxiomRouterTest is Test {
         vm.deal(user1, 10 ether);
         vm.deal(user2, 10 ether);
         vm.deal(enterprise, 10 ether);
+        
+        // Initialize facets helper for convenient access
+        axiomFacets = AxiomFacets(payable(address(axiom)));
     }
 
     // ============ Initialization Tests ============
 
     function test_Initialize() public view {
-        assertEq(axiom.VERSION(), "1.0.0");
-        assertEq(axiom.getBaseFee(), BASE_FEE);
+        assertEq(axiom.VERSION(), "3.0.0");
+        assertEq(axiomFacets.getBaseFee(), BASE_FEE);
         assertTrue(axiom.hasRole(axiom.DEFAULT_ADMIN_ROLE(), admin));
         assertTrue(axiom.hasRole(axiom.OPERATOR_ROLE(), admin));
         assertTrue(axiom.hasRole(axiom.PAUSER_ROLE(), admin));
@@ -96,7 +174,7 @@ contract AxiomRouterTest is Test {
     function test_Register() public {
         vm.startPrank(user1);
         
-        bytes32 recordId = axiom.register{value: BASE_FEE}(
+        bytes32 recordId = axiomFacets.register{value: BASE_FEE}(
             contentHash1,
             "ipfs://QmTest123"
         );
@@ -104,7 +182,7 @@ contract AxiomRouterTest is Test {
         assertTrue(recordId != bytes32(0));
         
         // Verify record
-        AxiomTypes.AxiomRecord memory record = axiom.getRecord(recordId);
+        AxiomTypes.AxiomRecord memory record = axiomFacets.getRecord(recordId);
         assertEq(record.issuer, user1);
         assertEq(record.contentHash, contentHash1);
         assertEq(uint8(record.status), uint8(AxiomTypes.ContentStatus.ACTIVE));
@@ -126,7 +204,7 @@ contract AxiomRouterTest is Test {
             "ipfs://QmTest123"
         );
         
-        axiom.register{value: BASE_FEE}(contentHash1, "ipfs://QmTest123");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "ipfs://QmTest123");
         
         vm.stopPrank();
     }
@@ -135,7 +213,7 @@ contract AxiomRouterTest is Test {
         uint256 balanceBefore = user1.balance;
         
         vm.prank(user1);
-        axiom.register{value: 1 ether}(contentHash1, "");
+        axiomFacets.register{value: 1 ether}(contentHash1, "");
         
         uint256 balanceAfter = user1.balance;
         assertEq(balanceBefore - balanceAfter, BASE_FEE);
@@ -143,30 +221,30 @@ contract AxiomRouterTest is Test {
 
     function test_Register_RevertsOnDuplicate() public {
         vm.prank(user1);
-        axiom.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
         vm.prank(user1);
         vm.expectRevert();
-        axiom.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "");
     }
 
     function test_Register_RevertsOnInsufficientFee() public {
         vm.prank(user1);
         vm.expectRevert();
-        axiom.register{value: BASE_FEE / 2}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE / 2}(contentHash1, "");
     }
 
     function test_DifferentUsersSameHash() public {
         // Different users CAN register the same hash (each binds to their identity)
         vm.prank(user1);
-        bytes32 record1 = axiom.register{value: BASE_FEE}(contentHash1, "");
+        bytes32 record1 = axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
         vm.prank(user2);
-        bytes32 record2 = axiom.register{value: BASE_FEE}(contentHash1, "");
+        bytes32 record2 = axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
         assertTrue(record1 != record2);
-        assertEq(axiom.getRecord(record1).issuer, user1);
-        assertEq(axiom.getRecord(record2).issuer, user2);
+        assertEq(axiomFacets.getRecord(record1).issuer, user1);
+        assertEq(axiomFacets.getRecord(record2).issuer, user2);
     }
 
     // ============ Batch Registration Tests ============
@@ -183,10 +261,10 @@ contract AxiomRouterTest is Test {
         uris[2] = "ipfs://3";
         
         vm.prank(user1);
-        bytes32[] memory recordIds = axiom.batchRegister{value: BASE_FEE * 3}(hashes, uris);
+        bytes32[] memory recordIds = axiomFacets.batchRegister{value: BASE_FEE * 3}(hashes, uris);
         
         assertEq(recordIds.length, 3);
-        assertEq(axiom.getTotalRecords(), 3);
+        assertEq(axiomFacets.getTotalRecords(), 3);
     }
 
     function test_BatchRegister_ArrayMismatch() public {
@@ -195,17 +273,17 @@ contract AxiomRouterTest is Test {
         
         vm.prank(user1);
         vm.expectRevert();
-        axiom.batchRegister{value: BASE_FEE * 3}(hashes, uris);
+        axiomFacets.batchRegister{value: BASE_FEE * 3}(hashes, uris);
     }
 
     // ============ Verification Tests ============
 
     function test_Verify() public {
         vm.prank(user1);
-        axiom.register{value: BASE_FEE}(contentHash1, "ipfs://test");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "ipfs://test");
         
         // Verify with correct issuer
-        (bool isValid, AxiomTypes.AxiomRecord memory record) = axiom.verify(contentHash1, user1);
+        (bool isValid, AxiomTypes.AxiomRecord memory record) = axiomFacets.verify(contentHash1, user1);
         
         assertTrue(isValid);
         assertEq(record.issuer, user1);
@@ -214,15 +292,15 @@ contract AxiomRouterTest is Test {
 
     function test_Verify_WrongIssuer() public {
         vm.prank(user1);
-        axiom.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
         // Verify with wrong issuer should fail
-        (bool isValid,) = axiom.verify(contentHash1, user2);
+        (bool isValid,) = axiomFacets.verify(contentHash1, user2);
         assertFalse(isValid);
     }
 
     function test_Verify_NonExistent() public {
-        (bool isValid,) = axiom.verify(contentHash1, user1);
+        (bool isValid,) = axiomFacets.verify(contentHash1, user1);
         assertFalse(isValid);
     }
 
@@ -230,15 +308,15 @@ contract AxiomRouterTest is Test {
 
     function test_Revoke() public {
         vm.startPrank(user1);
-        bytes32 recordId = axiom.register{value: BASE_FEE}(contentHash1, "");
+        bytes32 recordId = axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
-        axiom.revoke(recordId, "Key compromised");
+        axiomFacets.revoke(recordId, "Key compromised");
         
-        AxiomTypes.AxiomRecord memory record = axiom.getRecord(recordId);
+        AxiomTypes.AxiomRecord memory record = axiomFacets.getRecord(recordId);
         assertEq(uint8(record.status), uint8(AxiomTypes.ContentStatus.REVOKED));
         
         // Verify should now return false
-        (bool isValid,) = axiom.verify(contentHash1, user1);
+        (bool isValid,) = axiomFacets.verify(contentHash1, user1);
         assertFalse(isValid);
         
         vm.stopPrank();
@@ -246,20 +324,20 @@ contract AxiomRouterTest is Test {
 
     function test_Revoke_NotIssuer() public {
         vm.prank(user1);
-        bytes32 recordId = axiom.register{value: BASE_FEE}(contentHash1, "");
+        bytes32 recordId = axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
         vm.prank(user2);
         vm.expectRevert();
-        axiom.revoke(recordId, "Not my content");
+        axiomFacets.revoke(recordId, "Not my content");
     }
 
     function test_Revoke_AlreadyRevoked() public {
         vm.startPrank(user1);
-        bytes32 recordId = axiom.register{value: BASE_FEE}(contentHash1, "");
-        axiom.revoke(recordId, "First revoke");
+        bytes32 recordId = axiomFacets.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.revoke(recordId, "First revoke");
         
         vm.expectRevert();
-        axiom.revoke(recordId, "Second revoke");
+        axiomFacets.revoke(recordId, "Second revoke");
         vm.stopPrank();
     }
 
@@ -268,9 +346,9 @@ contract AxiomRouterTest is Test {
     function test_RegisterIdentity() public {
         vm.startPrank(user1);
         
-        axiom.registerIdentity("Reuters News", "ipfs://proof123");
+        axiomFacets.registerIdentity("Reuters News", "ipfs://proof123");
         
-        AxiomTypes.IdentityInfo memory info = axiom.resolveIdentity(user1);
+        AxiomTypes.IdentityInfo memory info = axiomFacets.resolveIdentity(user1);
         assertEq(info.name, "Reuters News");
         assertFalse(info.isVerified);
         
@@ -279,29 +357,29 @@ contract AxiomRouterTest is Test {
 
     function test_VerifyIdentity() public {
         vm.prank(user1);
-        axiom.registerIdentity("CNN", "ipfs://proof");
+        axiomFacets.registerIdentity("CNN", "ipfs://proof");
         
         vm.prank(operator);
-        axiom.verifyIdentity(user1);
+        axiomFacets.verifyIdentity(user1);
         
-        assertTrue(axiom.isIdentityVerified(user1));
+        assertTrue(axiomFacets.isIdentityVerified(user1));
     }
 
     function test_ResolveByName() public {
         vm.prank(user1);
-        axiom.registerIdentity("BBC News", "ipfs://proof");
+        axiomFacets.registerIdentity("BBC News", "ipfs://proof");
         
-        address resolved = axiom.resolveByName("BBC News");
+        address resolved = axiomFacets.resolveByName("BBC News");
         assertEq(resolved, user1);
     }
 
     function test_Identity_DuplicateName() public {
         vm.prank(user1);
-        axiom.registerIdentity("UniqueNews", "");
+        axiomFacets.registerIdentity("UniqueNews", "");
         
         vm.prank(user2);
         vm.expectRevert();
-        axiom.registerIdentity("UniqueNews", "");
+        axiomFacets.registerIdentity("UniqueNews", "");
     }
 
     // ============ Treasury Tests ============
@@ -310,21 +388,21 @@ contract AxiomRouterTest is Test {
         uint256 newFee = 0.001 ether;
         
         vm.prank(admin);
-        axiom.setBaseFee(newFee);
+        axiomFacets.setBaseFee(newFee);
         
-        assertEq(axiom.getBaseFee(), newFee);
+        assertEq(axiomFacets.getBaseFee(), newFee);
     }
 
     function test_EnterpriseRate() public {
         vm.startPrank(admin);
         
         // Grant enterprise status
-        axiom.grantEnterpriseStatus(enterprise);
-        assertTrue(axiom.isEnterpriseUser(enterprise));
+        axiomFacets.grantEnterpriseStatus(enterprise);
+        assertTrue(axiomFacets.isEnterpriseUser(enterprise));
         
         // Set custom rate
-        axiom.setEnterpriseRate(enterprise, 0.00001 ether);
-        assertEq(axiom.getFee(enterprise), 0.00001 ether);
+        axiomFacets.setEnterpriseRate(enterprise, 0.00001 ether);
+        assertEq(axiomFacets.getFee(enterprise), 0.00001 ether);
         
         vm.stopPrank();
     }
@@ -332,7 +410,7 @@ contract AxiomRouterTest is Test {
     function test_Withdraw() public {
         // First accumulate some fees
         vm.prank(user1);
-        axiom.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
         uint256 contractBalance = address(axiom).balance;
         assertTrue(contractBalance >= BASE_FEE);
@@ -340,7 +418,7 @@ contract AxiomRouterTest is Test {
         uint256 treasuryBalanceBefore = treasury.balance;
         
         vm.prank(admin);
-        axiom.withdraw(treasury, contractBalance);
+        axiomFacets.withdraw(treasury, contractBalance);
         
         assertEq(treasury.balance - treasuryBalanceBefore, contractBalance);
     }
@@ -349,35 +427,35 @@ contract AxiomRouterTest is Test {
 
     function test_BanAddress() public {
         vm.prank(operator);
-        axiom.banAddress(user1, "Spam");
+        axiomFacets.banAddress(user1, "Spam");
         
-        assertTrue(axiom.isBanned(user1));
+        assertTrue(axiomFacets.isBanned(user1));
         
         vm.prank(user1);
         vm.expectRevert();
-        axiom.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "");
     }
 
     function test_UnbanAddress() public {
         vm.startPrank(operator);
-        axiom.banAddress(user1, "Spam");
-        axiom.unbanAddress(user1);
+        axiomFacets.banAddress(user1, "Spam");
+        axiomFacets.unbanAddress(user1);
         vm.stopPrank();
         
-        assertFalse(axiom.isBanned(user1));
+        assertFalse(axiomFacets.isBanned(user1));
         
         vm.prank(user1);
-        axiom.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "");
     }
 
     function test_DisputeContent() public {
         vm.prank(user1);
-        bytes32 recordId = axiom.register{value: BASE_FEE}(contentHash1, "");
+        bytes32 recordId = axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
         vm.prank(operator);
-        axiom.disputeContent(recordId, "Possible deepfake");
+        axiomFacets.disputeContent(recordId, "Possible deepfake");
         
-        AxiomTypes.AxiomRecord memory record = axiom.getRecord(recordId);
+        AxiomTypes.AxiomRecord memory record = axiomFacets.getRecord(recordId);
         assertEq(uint8(record.status), uint8(AxiomTypes.ContentStatus.DISPUTED));
     }
 
@@ -387,13 +465,13 @@ contract AxiomRouterTest is Test {
         
         vm.prank(user1);
         vm.expectRevert();
-        axiom.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
         vm.prank(admin);
         axiom.unpause();
         
         vm.prank(user1);
-        axiom.register{value: BASE_FEE}(contentHash1, ""); // Should work now
+        axiomFacets.register{value: BASE_FEE}(contentHash1, ""); // Should work now
     }
 
     // ============ Rate Limit Tests ============
@@ -404,32 +482,32 @@ contract AxiomRouterTest is Test {
         // Register 10 times (max allowed)
         for (uint256 i = 0; i < 10; i++) {
             bytes32 hash = keccak256(abi.encodePacked("content", i));
-            axiom.register{value: BASE_FEE}(hash, "");
+            axiomFacets.register{value: BASE_FEE}(hash, "");
         }
         
         // 11th should fail
         bytes32 limitedHash = keccak256("content10");
         vm.expectRevert();
-        axiom.register{value: BASE_FEE}(limitedHash, "");
+        axiomFacets.register{value: BASE_FEE}(limitedHash, "");
         
         vm.stopPrank();
     }
 
     function test_EnterpriseBypassesRateLimit() public {
         vm.prank(admin);
-        axiom.grantEnterpriseStatus(enterprise);
+        axiomFacets.grantEnterpriseStatus(enterprise);
         
         vm.startPrank(enterprise);
         
         // Should be able to register more than 10 times
         for (uint256 i = 0; i < 15; i++) {
             bytes32 hash = keccak256(abi.encodePacked("enterprise", i));
-            axiom.register{value: BASE_FEE}(hash, "");
+            axiomFacets.register{value: BASE_FEE}(hash, "");
         }
         
         vm.stopPrank();
         
-        assertEq(axiom.getTotalRecords(), 15);
+        assertEq(axiomFacets.getTotalRecords(), 15);
     }
 
     // ============ Additional Coverage Tests ============
@@ -437,85 +515,85 @@ contract AxiomRouterTest is Test {
     function test_UpdateIdentity() public {
         // First register identity
         vm.prank(user1);
-        axiom.registerIdentity("OldName", "ipfs://old");
+        axiomFacets.registerIdentity("OldName", "ipfs://old");
         
         // Update identity
         vm.prank(user1);
-        axiom.updateIdentity("NewName", "ipfs://new");
+        axiomFacets.updateIdentity("NewName", "ipfs://new");
         
-        AxiomTypes.IdentityInfo memory info = axiom.resolveIdentity(user1);
+        AxiomTypes.IdentityInfo memory info = axiomFacets.resolveIdentity(user1);
         assertEq(info.name, "NewName");
         assertEq(info.proofURI, "ipfs://new");
         
         // Old name should be freed
-        assertEq(axiom.resolveByName("OldName"), address(0));
-        assertEq(axiom.resolveByName("NewName"), user1);
+        assertEq(axiomFacets.resolveByName("OldName"), address(0));
+        assertEq(axiomFacets.resolveByName("NewName"), user1);
     }
 
     function test_UpdateIdentity_NotRegistered() public {
         vm.prank(user1);
         vm.expectRevert();
-        axiom.updateIdentity("Name", "");
+        axiomFacets.updateIdentity("Name", "");
     }
 
     function test_UpdateIdentity_NameTaken() public {
         vm.prank(user1);
-        axiom.registerIdentity("TakenName", "");
+        axiomFacets.registerIdentity("TakenName", "");
         
         vm.prank(user2);
-        axiom.registerIdentity("OtherName", "");
+        axiomFacets.registerIdentity("OtherName", "");
         
         // Try to update to taken name
         vm.prank(user2);
         vm.expectRevert("Name already taken");
-        axiom.updateIdentity("TakenName", "");
+        axiomFacets.updateIdentity("TakenName", "");
     }
 
     function test_RevokeVerification() public {
         // Register identity
         vm.prank(user1);
-        axiom.registerIdentity("Verified", "");
+        axiomFacets.registerIdentity("Verified", "");
         
         // Verify first
         vm.prank(operator);
-        axiom.verifyIdentity(user1);
-        assertTrue(axiom.isIdentityVerified(user1));
+        axiomFacets.verifyIdentity(user1);
+        assertTrue(axiomFacets.isIdentityVerified(user1));
         
         // Revoke verification
         vm.prank(operator);
-        axiom.revokeVerification(user1);
-        assertFalse(axiom.isIdentityVerified(user1));
+        axiomFacets.revokeVerification(user1);
+        assertFalse(axiomFacets.isIdentityVerified(user1));
     }
 
     function test_RevokeVerification_NotRegistered() public {
         vm.prank(operator);
         vm.expectRevert();
-        axiom.revokeVerification(user1);
+        axiomFacets.revokeVerification(user1);
     }
 
     function test_VerifyIdentity_NotRegistered() public {
         vm.prank(operator);
         vm.expectRevert();
-        axiom.verifyIdentity(user1);
+        axiomFacets.verifyIdentity(user1);
     }
 
     function test_RevokeEnterpriseStatus() public {
         // Grant enterprise first
         vm.prank(admin);
-        axiom.grantEnterpriseStatus(enterprise);
-        assertTrue(axiom.isEnterpriseUser(enterprise));
+        axiomFacets.grantEnterpriseStatus(enterprise);
+        assertTrue(axiomFacets.isEnterpriseUser(enterprise));
         
         // Revoke enterprise
         vm.prank(admin);
-        axiom.revokeEnterpriseStatus(enterprise);
-        assertFalse(axiom.isEnterpriseUser(enterprise));
+        axiomFacets.revokeEnterpriseStatus(enterprise);
+        assertFalse(axiomFacets.isEnterpriseUser(enterprise));
     }
 
     function test_SetTreasuryWallet() public {
         address newTreasury = address(100);
         
         vm.prank(admin);
-        axiom.setTreasuryWallet(newTreasury);
+        axiomFacets.setTreasuryWallet(newTreasury);
         
         // Verify by using the getFee which uses storage
         // (indirect verification since treasuryWallet is storage)
@@ -524,40 +602,40 @@ contract AxiomRouterTest is Test {
     function test_SetTreasuryWallet_InvalidAddress() public {
         vm.prank(admin);
         vm.expectRevert("Invalid address");
-        axiom.setTreasuryWallet(address(0));
+        axiomFacets.setTreasuryWallet(address(0));
     }
 
     function test_GetTotalFeesCollected() public {
         // Initially 0
-        assertEq(axiom.getTotalFeesCollected(), 0);
+        assertEq(axiomFacets.getTotalFeesCollected(), 0);
         
         // Register and check fees collected
         vm.prank(user1);
-        axiom.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
-        assertEq(axiom.getTotalFeesCollected(), BASE_FEE);
+        assertEq(axiomFacets.getTotalFeesCollected(), BASE_FEE);
     }
 
     function test_SetRateLimit() public {
         vm.prank(admin);
-        axiom.setRateLimit(120, 20); // 2 minutes, 20 actions
+        axiomFacets.setRateLimit(120, 20); // 2 minutes, 20 actions
         
         // Verify by testing rate limit behavior
         vm.startPrank(user1);
         for (uint256 i = 0; i < 15; i++) {
             bytes32 hash = keccak256(abi.encodePacked("ratelimit", i));
-            axiom.register{value: BASE_FEE}(hash, "");
+            axiomFacets.register{value: BASE_FEE}(hash, "");
         }
         vm.stopPrank();
         
         // Should have succeeded since limit is now 20
-        assertEq(axiom.getTotalRecords(), 15);
+        assertEq(axiomFacets.getTotalRecords(), 15);
     }
 
     function test_SetMaxBatchSize() public {
         // Set max batch to 5
         vm.prank(admin);
-        axiom.setMaxBatchSize(5);
+        axiomFacets.setMaxBatchSize(5);
         
         // Try batch of 6 - should fail
         bytes32[] memory hashes = new bytes32[](6);
@@ -569,7 +647,7 @@ contract AxiomRouterTest is Test {
         
         vm.prank(user1);
         vm.expectRevert();
-        axiom.batchRegister{value: BASE_FEE * 6}(hashes, uris);
+        axiomFacets.batchRegister{value: BASE_FEE * 6}(hashes, uris);
     }
 
     function test_BatchRegister_ExceedsMaxBatchSize() public {
@@ -583,13 +661,13 @@ contract AxiomRouterTest is Test {
         
         vm.prank(user1);
         vm.expectRevert();
-        axiom.batchRegister{value: BASE_FEE * 101}(hashes, uris);
+        axiomFacets.batchRegister{value: BASE_FEE * 101}(hashes, uris);
     }
 
     function test_BatchRegister_SkipsDuplicates() public {
         // First register one hash
         vm.prank(user1);
-        axiom.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
         // Try batch with that hash included
         bytes32[] memory hashes = new bytes32[](3);
@@ -601,7 +679,7 @@ contract AxiomRouterTest is Test {
         uris[0] = ""; uris[1] = ""; uris[2] = "";
         
         vm.prank(user1);
-        bytes32[] memory recordIds = axiom.batchRegister{value: BASE_FEE * 3}(hashes, uris);
+        bytes32[] memory recordIds = axiomFacets.batchRegister{value: BASE_FEE * 3}(hashes, uris);
         
         // First should be skipped (bytes32(0)), others created
         assertEq(recordIds[0], bytes32(0));
@@ -609,7 +687,7 @@ contract AxiomRouterTest is Test {
         assertTrue(recordIds[2] != bytes32(0));
         
         // Total should be 3 (1 from first + 2 from batch)
-        assertEq(axiom.getTotalRecords(), 3);
+        assertEq(axiomFacets.getTotalRecords(), 3);
     }
 
     function test_BatchRegister_InsufficientFee() public {
@@ -622,17 +700,17 @@ contract AxiomRouterTest is Test {
         
         vm.prank(user1);
         vm.expectRevert();
-        axiom.batchRegister{value: BASE_FEE}(hashes, uris); // Only 1 fee for 3 items
+        axiomFacets.batchRegister{value: BASE_FEE}(hashes, uris); // Only 1 fee for 3 items
     }
 
     function test_GetRecordsByIssuer() public {
         vm.startPrank(user1);
-        axiom.register{value: BASE_FEE}(contentHash1, "");
-        axiom.register{value: BASE_FEE}(contentHash2, "");
-        axiom.register{value: BASE_FEE}(contentHash3, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash2, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash3, "");
         vm.stopPrank();
         
-        bytes32[] memory records = axiom.getRecordsByIssuer(user1);
+        bytes32[] memory records = axiomFacets.getRecordsByIssuer(user1);
         assertEq(records.length, 3);
     }
 
@@ -640,7 +718,7 @@ contract AxiomRouterTest is Test {
         bytes32 fakeRecordId = keccak256("nonexistent");
         
         vm.expectRevert();
-        axiom.getRecord(fakeRecordId);
+        axiomFacets.getRecord(fakeRecordId);
     }
 
     function test_Revoke_RecordNotFound() public {
@@ -648,7 +726,7 @@ contract AxiomRouterTest is Test {
         
         vm.prank(user1);
         vm.expectRevert();
-        axiom.revoke(fakeRecordId, "reason");
+        axiomFacets.revoke(fakeRecordId, "reason");
     }
 
     function test_DisputeContent_RecordNotFound() public {
@@ -656,22 +734,22 @@ contract AxiomRouterTest is Test {
         
         vm.prank(operator);
         vm.expectRevert();
-        axiom.disputeContent(fakeRecordId, "reason");
+        axiomFacets.disputeContent(fakeRecordId, "reason");
     }
 
     function test_Withdraw_InvalidRecipient() public {
         vm.prank(user1);
-        axiom.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
         vm.prank(admin);
         vm.expectRevert("Invalid recipient");
-        axiom.withdraw(address(0), BASE_FEE);
+        axiomFacets.withdraw(address(0), BASE_FEE);
     }
 
     function test_Withdraw_InsufficientBalance() public {
         vm.prank(admin);
         vm.expectRevert("Insufficient balance");
-        axiom.withdraw(treasury, 1 ether);
+        axiomFacets.withdraw(treasury, 1 ether);
     }
 
     function test_ReceiveEth() public {
@@ -692,7 +770,7 @@ contract AxiomRouterTest is Test {
         axiom.upgradeToAndCall(address(newImpl), "");
         
         // Verify still works
-        assertEq(axiom.VERSION(), "1.0.0");
+        assertEq(axiom.VERSION(), "3.0.0");
     }
 
     function test_Upgrade_Unauthorized() public {
@@ -706,32 +784,32 @@ contract AxiomRouterTest is Test {
 
     function test_RegisterIdentity_AlreadyExists() public {
         vm.prank(user1);
-        axiom.registerIdentity("Name1", "");
+        axiomFacets.registerIdentity("Name1", "");
         
         vm.prank(user1);
         vm.expectRevert();
-        axiom.registerIdentity("Name2", "");
+        axiomFacets.registerIdentity("Name2", "");
     }
 
     function test_RegisterIdentity_WhenBanned() public {
         vm.prank(operator);
-        axiom.banAddress(user1, "banned");
+        axiomFacets.banAddress(user1, "banned");
         
         vm.prank(user1);
         vm.expectRevert();
-        axiom.registerIdentity("Name", "");
+        axiomFacets.registerIdentity("Name", "");
     }
 
     function test_UpdateIdentity_WhenBanned() public {
         vm.prank(user1);
-        axiom.registerIdentity("Name", "");
+        axiomFacets.registerIdentity("Name", "");
         
         vm.prank(operator);
-        axiom.banAddress(user1, "banned");
+        axiomFacets.banAddress(user1, "banned");
         
         vm.prank(user1);
         vm.expectRevert();
-        axiom.updateIdentity("NewName", "");
+        axiomFacets.updateIdentity("NewName", "");
     }
 
     function test_RateLimitReset_AfterWindow() public {
@@ -740,7 +818,7 @@ contract AxiomRouterTest is Test {
         // Register up to limit
         for (uint256 i = 0; i < 10; i++) {
             bytes32 hash = keccak256(abi.encodePacked("window1", i));
-            axiom.register{value: BASE_FEE}(hash, "");
+            axiomFacets.register{value: BASE_FEE}(hash, "");
         }
         vm.stopPrank();
         
@@ -750,31 +828,31 @@ contract AxiomRouterTest is Test {
         // Should be able to register again
         vm.prank(user1);
         bytes32 hash = keccak256("window2_0");
-        axiom.register{value: BASE_FEE}(hash, "");
+        axiomFacets.register{value: BASE_FEE}(hash, "");
         
-        assertEq(axiom.getTotalRecords(), 11);
+        assertEq(axiomFacets.getTotalRecords(), 11);
     }
 
     function test_GetFee_Enterprise() public {
         vm.startPrank(admin);
-        axiom.grantEnterpriseStatus(enterprise);
-        axiom.setEnterpriseRate(enterprise, 0.00005 ether);
+        axiomFacets.grantEnterpriseStatus(enterprise);
+        axiomFacets.setEnterpriseRate(enterprise, 0.00005 ether);
         vm.stopPrank();
         
-        assertEq(axiom.getFee(enterprise), 0.00005 ether);
+        assertEq(axiomFacets.getFee(enterprise), 0.00005 ether);
     }
 
     function test_GetFee_Regular() public view {
-        assertEq(axiom.getFee(user1), BASE_FEE);
+        assertEq(axiomFacets.getFee(user1), BASE_FEE);
     }
 
     function test_EnterpriseWithoutCustomRate() public {
         // Grant enterprise but no custom rate
         vm.prank(admin);
-        axiom.grantEnterpriseStatus(enterprise);
+        axiomFacets.grantEnterpriseStatus(enterprise);
         
         // Should use base fee since no custom rate set
-        assertEq(axiom.getFee(enterprise), BASE_FEE);
+        assertEq(axiomFacets.getFee(enterprise), BASE_FEE);
     }
 
     // ============ Fuzz Tests ============
@@ -783,9 +861,9 @@ contract AxiomRouterTest is Test {
         vm.assume(hash != bytes32(0));
         
         vm.prank(user1);
-        bytes32 recordId = axiom.register{value: BASE_FEE}(hash, uri);
+        bytes32 recordId = axiomFacets.register{value: BASE_FEE}(hash, uri);
         
-        AxiomTypes.AxiomRecord memory record = axiom.getRecord(recordId);
+        AxiomTypes.AxiomRecord memory record = axiomFacets.getRecord(recordId);
         assertEq(record.contentHash, hash);
         assertEq(record.metadataURI, uri);
     }
@@ -795,9 +873,9 @@ contract AxiomRouterTest is Test {
         vm.deal(issuer, 1 ether);
         
         vm.prank(issuer);
-        axiom.register{value: BASE_FEE}(hash, "");
+        axiomFacets.register{value: BASE_FEE}(hash, "");
         
-        (bool isValid,) = axiom.verify(hash, issuer);
+        (bool isValid,) = axiomFacets.verify(hash, issuer);
         assertTrue(isValid);
     }
 
@@ -816,7 +894,7 @@ contract AxiomRouterTest is Test {
         vm.deal(user1, totalFee);
         
         vm.prank(user1);
-        bytes32[] memory recordIds = axiom.batchRegister{value: totalFee}(hashes, uris);
+        bytes32[] memory recordIds = axiomFacets.batchRegister{value: totalFee}(hashes, uris);
         
         assertEq(recordIds.length, count);
     }
@@ -858,7 +936,7 @@ contract AxiomRouterTest is Test {
     function test_Withdraw_TransferFails() public {
         // First accumulate fees
         vm.prank(user1);
-        axiom.register{value: BASE_FEE}(contentHash1, "");
+        axiomFacets.register{value: BASE_FEE}(contentHash1, "");
         
         // Deploy contract that rejects ETH
         EthRejecter rejecter = new EthRejecter(address(axiom));
@@ -866,7 +944,7 @@ contract AxiomRouterTest is Test {
         // Try to withdraw to this contract
         vm.prank(admin);
         vm.expectRevert("Transfer failed");
-        axiom.withdraw(address(rejecter), BASE_FEE);
+        axiomFacets.withdraw(address(rejecter), BASE_FEE);
     }
 }
 
@@ -876,17 +954,19 @@ contract AxiomRouterTest is Test {
  */
 contract EthRejecter {
     AxiomRouter public axiom;
+    AxiomFacets public axiomFacets;
     
     constructor(address _axiom) {
         axiom = AxiomRouter(payable(_axiom));
+        axiomFacets = AxiomFacets(payable(_axiom));
     }
     
     function registerWithExcess(bytes32 hash) external payable {
-        axiom.register{value: msg.value}(hash, "");
+        axiomFacets.register{value: msg.value}(hash, "");
     }
     
     function batchRegisterWithExcess(bytes32[] calldata hashes, string[] calldata uris) external payable {
-        axiom.batchRegister{value: msg.value}(hashes, uris);
+        axiomFacets.batchRegister{value: msg.value}(hashes, uris);
     }
     
     // Reject all ETH transfers

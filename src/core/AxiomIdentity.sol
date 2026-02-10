@@ -23,6 +23,26 @@ contract AxiomIdentity is Initializable, IAxiomIdentity {
         _;
     }
 
+    /**
+     * @dev Ensures caller is not banned
+     */
+    modifier notBanned() {
+        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
+        if (s.bannedAddresses[msg.sender]) {
+            revert AxiomTypes.AddressBanned(msg.sender);
+        }
+        _;
+    }
+
+    /**
+     * @dev Ensures protocol is not paused
+     */
+    modifier whenNotPaused() {
+        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
+        require(!s.paused, "Protocol is paused");
+        _;
+    }
+
     // ============ External Functions ============
 
     /**
@@ -31,7 +51,7 @@ contract AxiomIdentity is Initializable, IAxiomIdentity {
     function registerIdentity(
         string calldata _name,
         string calldata _proofURI
-    ) external override {
+    ) external override notBanned {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         
         // Check if identity already exists
@@ -63,7 +83,7 @@ contract AxiomIdentity is Initializable, IAxiomIdentity {
     function updateIdentity(
         string calldata _name,
         string calldata _proofURI
-    ) external override {
+    ) external override notBanned {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         
         // Check identity exists

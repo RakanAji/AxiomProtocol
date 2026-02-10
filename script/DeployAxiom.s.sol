@@ -44,7 +44,8 @@ contract DeployAxiom is Script {
         // Verify deployment
         AxiomRouter axiom = AxiomRouter(payable(address(axiomProxy)));
         console2.log("Protocol Version:", axiom.VERSION());
-        console2.log("Base Fee:", axiom.getBaseFee());
+        // Base Fee now requires facet to be registered
+        // console2.log("Base Fee:", axiom.getBaseFee());
         console2.log("Deployment complete!");
 
         return (address(axiomProxy), address(axiomImpl));
