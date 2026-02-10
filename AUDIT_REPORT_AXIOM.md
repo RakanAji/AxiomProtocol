@@ -78,6 +78,36 @@ While the comment suggests that access control is enforced by the Router, this a
 + }
 ```
 
+### [H-03] Royalty distribution loop allows single recipient to block all license purchases (DoS)
+
+**Severity:** High
+**Location:** `src/core/AxiomLicenseNFT.sol` (Function: `_distributeRoyaltiesETH`)
+
+**Description:**
+The contract utilizes a "Push Payment" pattern to distribute royalties within a loop. When a license is purchased, the `_distributeRoyaltiesETH` function iterates through all recipients defined in the royalty split and attempts to send ETH using `.call`.
+
+```solidity
+// src/core/AxiomLicenseNFT.sol:74-75
+(bool success,) = payable(_split.recipients[i]).call{value: share}("");
+require(success, "Royalty transfer failed");
+```
+The strict check `require(success)` creates a critical vulnerability. If any single recipient in the list reverts the transaction (e.g., a smart contract without a `receive()` function, a malicious contract designed to revert, or a grieving attack), the entire purchase transaction will revert.
+
+**Impact**: A single malicious or broken address in the royalty list causes a permanent Denial of Service (DoS) for that license. No user can purchase the license, locking revenue for all other recipients and the protocol.
+
+**Proof of Concept (PoC)**: A test case demonstrated that adding a `BrokenRecipient` (which reverts on receipt) to the royalty split caused all subsequent `purchaseLicense` calls to fail. Reference: `test/LicenseAudit.t.sol` (Test: `testFinding_RoyaltyPoisoning`)
+
+**Recommendation**: Adopt a "Pull over Push" strategy for failed transfers. If an ETH transfer fails, do not revert. Instead, record the failed amount in the existing `pendingRoyalties` mapping, allowing the recipient to withdraw it manually later via `claimRoyalties`.
+```diff
+- (bool success,) = payable(_split.recipients[i]).call{value: share}("");
+- require(success, "Royalty transfer failed");
++ (bool success,) = payable(_split.recipients[i]).call{value: share}("");
++ if (!success) {
++     LicenseStorage storage s = _getLicenseStorage();
++     s.pendingRoyalties[address(0)][_split.recipients[i]] += share;
++ }
+```
+
 ### [M-01] Strict check on ETH refund causes Denial of Service for smart contract users
 **Severity:** High
 **Location:** `AxiomRouter.sol` (Function: `register, batchRegister`)
@@ -105,3 +135,50 @@ if (msg.value > requiredFee) {
 +   payable(msg.sender).call{value: msg.value - requiredFee}(""); 
 }
 ```
+
+### [M-02] Identity update fails to update reverse-lookup mapping, causing data inconsistency
+
+**Severity:** Medium
+**Location:** `src/AxiomRouter.sol` (Function: `updateIdentity`)
+
+**Description:**
+The `updateIdentity` function updates the user's `Identity` struct (name and proofURI) but fails to update the critical `nameToAddress` reverse-lookup mapping.
+
+```solidity
+// src/AxiomRouter.sol:114-115
+s.identities[msg.sender].name = _name;
+s.identities[msg.sender].proofURI = _proofURI;
+// Missing: s.nameToAddress mapping update!
+```
+**Impact**:
+1. **Ghost Name**: The user's old name remains permanently linked to their address in `nameToAddress`, preventing others from claiming it.
+2. **Unresolvable New Name**: The new name is not registered in `nameToAddress`. Calling `resolveByName(newName)` returns `address(0)`, making the user invisible to name resolution lookups despite having a valid identity struct.
+
+**Proof of Concept (PoC)**: A test case confirmed that after calling `updateIdentity("SuperUser")`, resolving "SuperUser" returns `0x0`, while resolving the old name "AxiomUser" still returns the user's address. Reference: `test/IdentityAudit.t.sol` (Test: `testFinding_IdentityInconsistency`)
+
+**Recommendation**: The `updateIdentity` function must:
+1. Delete the mapping for the old name.
+2. Set the mapping for the new name to `msg.sender`.
+3. Ensure the new name is not already taken.
+```solidity
+function updateIdentity(string calldata _name, string calldata _proofURI) external override notBanned {
+    AxiomStorage.Storage storage s = AxiomStorage.getStorage();
+    require(bytes(_name).length > 0, "Name empty");
+    
+    // 1. Check consistency
+    string memory oldName = s.identities[msg.sender].name;
+    require(keccak256(bytes(oldName)) != keccak256(bytes(_name)), "Same name");
+    require(s.nameToAddress[_name] == address(0), "Name taken");
+
+    // 2. Update Mappings
+    s.nameToAddress[oldName] = address(0); // Free up old name
+    s.nameToAddress[_name] = msg.sender;   // Reserve new name
+
+    // 3. Update Struct
+    s.identities[msg.sender].name = _name;
+    s.identities[msg.sender].proofURI = _proofURI;
+    
+    emit AxiomTypes.IdentityRegistered(msg.sender, _name, _proofURI);
+}
+```
+
