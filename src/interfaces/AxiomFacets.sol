@@ -83,6 +83,12 @@ interface AxiomFacets {
     function royaltyInfo(uint256 tokenId, uint256 salePrice) external view returns (address, uint256);
     function setRoyaltySplit(bytes32 _recordId, address[] calldata _recipients, uint16[] calldata _shares) external;
     
+    // License Query Functions
+    function getLicense(uint256 _licenseId) external view returns (AxiomTypesV2.License memory);
+    function getLicensesByRecord(bytes32 _recordId) external view returns (uint256[] memory);
+    function isLicenseValid(uint256 _tokenId) external view returns (bool);
+    function getRoyaltySplit(bytes32 _recordId) external view returns (AxiomTypesV2.RoyaltySplit memory);
+    
     // ============ AxiomDisputeFacet Functions ============
     function initiateDispute(
         bytes32 _recordId,
@@ -100,10 +106,31 @@ interface AxiomFacets {
     function submitEvidence(bytes32 _disputeId, string calldata _evidenceURI) external;
     function escalateToArbitration(bytes32 _disputeId, address _arbitrator) external payable;
     function resolveByTimeout(bytes32 _disputeId) external;
+    function settleDispute(bytes32 _disputeId, uint16 _challengerShare, bytes calldata _ownerSig, bytes calldata _challengerSig) external;
     function claimStake(bytes32 _disputeId) external returns (uint256);
     function getDispute(bytes32 _disputeId) external view returns (AxiomTypesV2.Dispute memory);
     function getDisputesByRecord(bytes32 _recordId) external view returns (bytes32[] memory);
+    function getDisputesByChallenger(address _challenger) external view returns (bytes32[] memory);
+    function getActiveDisputes(uint256 _offset, uint256 _limit) external view returns (bytes32[] memory);
     function hasActiveDispute(bytes32 _recordId) external view returns (bool);
+    function getStakeConfig() external view returns (AxiomTypesV2.StakeConfig memory);
+    function getMinimumStake(bytes32 _recordId) external view returns (uint256);
+    function getApprovedArbitrators() external view returns (address[] memory);
+    function isArbitratorApproved(address _arbitrator) external view returns (bool);
+    function appeal(bytes32 _disputeId, string calldata _reason) external payable returns (bytes32);
+    function getAppealDeadline(bytes32 _disputeId) external view returns (uint256);
+    function rule(uint256 _externalDisputeId, uint256 _ruling) external;
+    function getArbitratorFee(address _arbitrator, AxiomTypesV2.DisputeReason _reason) external view returns (uint256);
+    
+    // License additional query functions
+    function hasValidLicense(address _licensee, bytes32 _recordId) external view returns (bool, AxiomTypesV2.LicenseType);
+    function claimRoyalties(bytes32 _recordId) external returns (uint256);
+    function claimRoyaltiesToken(bytes32 _recordId, address _token) external returns (uint256);
+    function pendingRoyalties(address _user, bytes32 _recordId) external view returns (uint256);
+    function createSublicense(uint256 _tokenId, uint256 _price, uint40 _duration) external returns (uint256);
+    function purchaseSublicense(uint256 _sublicenseId) external payable returns (uint256);
+    function setTerritoryRestrictions(uint256 _licenseId, string calldata _restrictionsURI) external;
+    function getLicensesByOwner(address _owner) external view returns (uint256[] memory);
     
     // ============ AxiomDIDRegistry Functions ============
     function registerDID(
