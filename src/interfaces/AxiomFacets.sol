@@ -104,5 +104,52 @@ interface AxiomFacets {
     function getDispute(bytes32 _disputeId) external view returns (AxiomTypesV2.Dispute memory);
     function getDisputesByRecord(bytes32 _recordId) external view returns (bytes32[] memory);
     function hasActiveDispute(bytes32 _recordId) external view returns (bool);
-}
+    
+    // ============ AxiomDIDRegistry Functions ============
+    function registerDID(
+        string calldata _did,
+        bytes32 _didDocumentHash,
+        string calldata _publicKeyJwk
+    ) external;
+    function updateDIDDocument(bytes32 _newDocumentHash) external;
+    function setServiceEndpoint(string calldata _serviceEndpoint) external;
+    function revokeDID() external;
+    function addDelegate(address _delegate, bytes32 _delegateType, uint256 _validity) external;
+    function revokeDelegate(address _delegate, bytes32 _delegateType) external;
+    function validDelegate(address _identity, bytes32 _delegateType, address _delegate) external view returns (bool);
+    function getDelegates(address _identity) external view returns (AxiomTypesV2.DIDDelegate[] memory);
+    function setVerificationLevel(address _user, AxiomTypesV2.VerificationLevel _level) external;
+    function getVerificationLevel(address _user) external view returns (AxiomTypesV2.VerificationLevel);
+    function meetsVerificationLevel(address _user, AxiomTypesV2.VerificationLevel _minLevel) external view returns (bool);
+    function resolveDID(string calldata _did) external view returns (AxiomTypesV2.DIDIdentity memory);
+    function getIdentity(address _user) external view returns (AxiomTypesV2.DIDIdentity memory);
+    function hasDID(address _user) external view returns (bool);
+    function isDIDActive(address _user) external view returns (bool);
+    function getDIDString(address _user) external view returns (string memory);
+    function setAttribute(bytes32 _name, bytes calldata _value, uint256 _validity) external;
+    function revokeAttribute(bytes32 _name, bytes calldata _value) external;
+    function verifySignature(address _identity, bytes32 _hash, bytes calldata _signature) external view returns (bool, address);
+    function nonce(address _identity) external view returns (uint256);
 
+    // ============ AxiomPrivacyFacet Functions ============
+    function privateRegister(
+        bytes32 _contentHash,
+        bytes32 _commitment,
+        bytes32 _nullifierHash,
+        bytes calldata _zkProof,
+        string calldata _metadataURI
+    ) external payable returns (bytes32);
+    function verifyOwnership(
+        bytes32 _recordId,
+        bytes32 _commitment,
+        bytes calldata _zkProof
+    ) external view returns (bool);
+    function requestErasure(bytes32 _recordId, bytes calldata _ownershipProof) external returns (bytes32);
+    function confirmErasure(bytes32 _requestId, bytes32 _proofOfCompliance) external;
+    function getPrivateRecord(bytes32 _recordId) external view returns (AxiomTypesV2.PrivateRecord memory);
+    function contentExists(bytes32 _contentHash) external view returns (bool);
+    function nullifierUsed(bytes32 _nullifierHash) external view returns (bool);
+    function isMetadataDeleted(bytes32 _recordId) external view returns (bool);
+    function getGDPRRequest(bytes32 _requestId) external view returns (AxiomTypesV2.GDPRRequest memory);
+    function getRecordsByCommitment(bytes32 _commitment) external view returns (bytes32[] memory);
+}

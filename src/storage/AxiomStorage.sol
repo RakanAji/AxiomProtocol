@@ -175,6 +175,11 @@ library AxiomStorage {
         
         /// @notice Reentrancy guard for Facets (1 = not entered, 2 = entered)
         uint256 reentrancyStatus;
+
+        // ============ V4 Privacy Module State ============
+        
+        /// @notice ZK Verifier contract address for privacy module
+        address privacyVerifier;
     }
 
     // ============ Storage Access ============
