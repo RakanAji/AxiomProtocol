@@ -18,13 +18,20 @@ interface IAccessControl {
  *      
  *      Features:
  *      - Private content registration with ZK commitments & nullifiers
- *      - Ownership verification via ZK proofs
+ *      - Ownership verification via ZK proofs (Groth16)
  *      - GDPR-compliant metadata erasure
- *      - Mock ZK verifier for testing (proof == bytes("valid"))
+ *      - Dependency-injected ZK verifier (production: Groth16Verifier, test: MockVerifier)
  *      
  *      Storage: Uses its own Diamond storage slot for privacy-specific data
  *      (same pattern as AxiomDIDRegistry), plus shared AxiomStorage for
  *      cross-facet state (verifier address).
+ *      
+ *      ZK Proof Flow:
+ *      1. Caller passes proof as ABI-encoded bytes: abi.encode(uint[2] a, uint[2][2] b, uint[2] c)
+ *      2. Facet decodes the proof into Groth16 components (a, b, c)
+ *      3. Facet constructs public inputs array from commitment/nullifier/contentHash
+ *      4. Facet calls IZKVerifier(verifierAddr).verifyProof(a, b, c, inputs)
+ *      5. The verifier address determines behavior (real math vs mock)
  *      
  *      CRITICAL: All state stored via Diamond storage pattern. No state variables
  *      in this contract.
@@ -35,9 +42,7 @@ contract AxiomPrivacyFacet {
     // ═══════════════════════════════════════════════════════════════════════════
 
     bytes32 public constant GDPR_ORACLE_ROLE = keccak256("GDPR_ORACLE_ROLE");
-
-    /// @dev Keccak256 of the valid mock proof for testing
-    bytes32 private constant VALID_PROOF_HASH = keccak256(bytes("valid"));
+    bytes32 public constant ADMIN_ROLE = 0x00;
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                          DIAMOND STORAGE
@@ -106,13 +111,13 @@ contract AxiomPrivacyFacet {
     /**
      * @notice Register content privately using ZK proof of ownership
      * @dev The commitment hides the user's identity while proving ownership.
-     *      Mock verifier: proof is valid if keccak256(proof) == keccak256("valid")
-     *      OR if an external IZKVerifier is configured and returns true.
+     *      The proof must be ABI-encoded Groth16 components:
+     *      abi.encode(uint256[2] a, uint256[2][2] b, uint256[2] c)
      *
      * @param _contentHash SHA-256 hash of the content
      * @param _commitment ZK commitment to user's identity
      * @param _nullifierHash Hash of nullifier for double-spend protection
-     * @param _zkProof Serialized ZK proof (or mock proof bytes("valid"))
+     * @param _zkProof ABI-encoded Groth16 proof (a, b, c)
      * @param _metadataURI IPFS/Arweave link to metadata
      * @return recordId Unique identifier for the private record
      */
@@ -184,11 +189,12 @@ contract AxiomPrivacyFacet {
     /**
      * @notice Verify ownership of private content using ZK proof
      * @dev Proves claimant owns content without revealing wallet address.
-     *      Mock logic: proof is valid if keccak256(proof) == keccak256("valid").
+     *      Decodes the ABI-encoded Groth16 proof and verifies it against
+     *      the configured IZKVerifier contract.
      *
      * @param _recordId Private record ID to verify ownership of
      * @param _commitment The commitment being verified
-     * @param _zkProof ZK proof of knowledge of commitment preimage
+     * @param _zkProof ABI-encoded Groth16 proof (a, b, c)
      * @return isOwner Whether proof is valid (claimant is owner)
      */
     function verifyOwnership(
@@ -205,7 +211,7 @@ contract AxiomPrivacyFacet {
         // Commitment must match
         if (record.commitment != _commitment) return false;
 
-        // Verify proof (mock or real)
+        // Verify proof via the configured ZK verifier
         return _verifyProofView(_zkProof, _commitment);
     }
 
@@ -362,13 +368,56 @@ contract AxiomPrivacyFacet {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    //                          ZK VERIFIER MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * @notice Set the ZK verifier contract address (admin only)
+     * @dev In production, set this to the deployed Groth16Verifier address.
+     *      In tests, set this to MockVerifier for functional testing.
+     *      This is the ONLY way to control verification behavior —
+     *      no backdoor flags exist in this contract.
+     *
+     * @param _verifier Address of the new IZKVerifier-compatible contract
+     */
+    function setZKVerifier(address _verifier) external onlyRole(ADMIN_ROLE) {
+        require(_verifier != address(0), "PrivacyFacet: Zero verifier address");
+        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
+        address oldVerifier = s.privacyVerifier;
+        s.privacyVerifier = _verifier;
+        emit ZKVerifierUpdated(oldVerifier, _verifier);
+    }
+
+    /**
+     * @notice Get the current ZK verifier address
+     * @return verifier Address of the configured verifier contract
+     */
+    function getZKVerifier() external view returns (address) {
+        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
+        return s.privacyVerifier;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     //                          ZK PROOF VERIFICATION (INTERNAL)
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * @dev Verify ZK proof - supports both mock and external verifier
-     *      Mock pattern: proof is valid if keccak256(proof) == keccak256("valid")
-     *      External: delegates to IZKVerifier if configured in shared storage
+     * @dev Verify a Groth16 ZK proof for private registration
+     *
+     *      Flow:
+     *      1. Require that a verifier contract is configured
+     *      2. ABI-decode the proof bytes into Groth16 components (a, b, c)
+     *      3. Construct the public inputs array: [commitment, nullifierHash, contentHash]
+     *      4. Call IZKVerifier.verifyProof(a, b, c, inputs)
+     *
+     *      The verifier contract determines whether real pairing math is checked
+     *      (Groth16Verifier) or proof passes unconditionally (MockVerifier).
+     *
+     * @param _proof ABI-encoded proof: abi.encode(uint256[2], uint256[2][2], uint256[2])
+     * @param _commitment ZK commitment from the registrant
+     * @param _nullifierHash Nullifier hash for double-spend protection
+     * @param _contentHash Hash of the content being registered
+     * @return True if the proof is valid
      */
     function _verifyProof(
         bytes calldata _proof,
@@ -376,50 +425,65 @@ contract AxiomPrivacyFacet {
         bytes32 _nullifierHash,
         bytes32 _contentHash
     ) internal view returns (bool) {
-        // Mock verification: proof == bytes("valid")
-        if (keccak256(_proof) == VALID_PROOF_HASH) {
-            return true;
-        }
-
-        // Check for external verifier in shared storage
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        if (s.privacyVerifier != address(0)) {
-            uint256[] memory inputs = new uint256[](3);
-            inputs[0] = uint256(_commitment);
-            inputs[1] = uint256(_nullifierHash);
-            inputs[2] = uint256(_contentHash);
-            return IZKVerifier(s.privacyVerifier).verifyProof(_proof, inputs);
-        }
+        require(s.privacyVerifier != address(0), "PrivacyFacet: No verifier configured");
 
-        return false;
+        // Decode the ABI-encoded Groth16 proof components
+        (
+            uint256[2] memory a,
+            uint256[2][2] memory b,
+            uint256[2] memory c
+        ) = abi.decode(_proof, (uint256[2], uint256[2][2], uint256[2]));
+
+        // Construct public inputs: [commitment, nullifierHash, contentHash]
+        uint256[] memory inputs = new uint256[](3);
+        inputs[0] = uint256(_commitment);
+        inputs[1] = uint256(_nullifierHash);
+        inputs[2] = uint256(_contentHash);
+
+        return IZKVerifier(s.privacyVerifier).verifyProof(a, b, c, inputs);
     }
 
     /**
-     * @dev View-safe proof verification (for ownership checks)
+     * @dev View-safe proof verification for ownership checks
+     *
+     *      Similar to _verifyProof but only uses commitment as the public input.
+     *      Used by verifyOwnership() and requestErasure() where only the
+     *      commitment needs to be proven, not the full registration context.
+     *
+     * @param _proof ABI-encoded proof: abi.encode(uint256[2], uint256[2][2], uint256[2])
+     * @param _commitment The commitment to verify knowledge of
+     * @return True if the proof is valid
      */
     function _verifyProofView(
         bytes calldata _proof,
         bytes32 _commitment
     ) internal view returns (bool) {
-        // Mock verification
-        if (keccak256(_proof) == VALID_PROOF_HASH) {
-            return true;
-        }
-
-        // External verifier
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        if (s.privacyVerifier != address(0)) {
-            uint256[] memory inputs = new uint256[](1);
-            inputs[0] = uint256(_commitment);
-            return IZKVerifier(s.privacyVerifier).verifyProof(_proof, inputs);
-        }
+        require(s.privacyVerifier != address(0), "PrivacyFacet: No verifier configured");
 
-        return false;
+        // Decode the ABI-encoded Groth16 proof components
+        (
+            uint256[2] memory a,
+            uint256[2][2] memory b,
+            uint256[2] memory c
+        ) = abi.decode(_proof, (uint256[2], uint256[2][2], uint256[2]));
+
+        // For ownership verification, only the commitment is a public input
+        uint256[] memory inputs = new uint256[](1);
+        inputs[0] = uint256(_commitment);
+
+        return IZKVerifier(s.privacyVerifier).verifyProof(a, b, c, inputs);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                              EVENTS
     // ═══════════════════════════════════════════════════════════════════════════
+
+    event ZKVerifierUpdated(
+        address indexed oldVerifier,
+        address indexed newVerifier
+    );
 
     event GDPRErasureRequested(
         bytes32 indexed requestId,

@@ -179,4 +179,8 @@ interface AxiomFacets {
     function isMetadataDeleted(bytes32 _recordId) external view returns (bool);
     function getGDPRRequest(bytes32 _requestId) external view returns (AxiomTypesV2.GDPRRequest memory);
     function getRecordsByCommitment(bytes32 _commitment) external view returns (bytes32[] memory);
+
+    // ZK Verifier Management
+    function setZKVerifier(address _verifier) external;
+    function getZKVerifier() external view returns (address);
 }

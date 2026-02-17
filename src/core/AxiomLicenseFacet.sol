@@ -76,7 +76,20 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     //                          LICENSE TEMPLATE MANAGEMENT
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Creates a new license template for registered content.
+     * @dev Only the content issuer can create licenses. Validates royalty and logical constraints.
+     * @param _recordId The content record ID this license applies to.
+     * @param _licenseType The type of license (CC-BY, Commercial, etc.).
+     * @param _price The price in payment token (or ETH if paymentToken is 0x0).
+     * @param _paymentToken The ERC-20 token for payment (0x0 for ETH).
+     * @param _royaltyBps The royalty percentage in basis points (250 = 2.5%).
+     * @param _validUntil The license expiration timestamp (0 for perpetual).
+     * @param _exclusive If true, only one licensee allowed.
+     * @param _sublicensable If true, licensee can create sublicenses.
+     * @param _customTermsURI IPFS URI to full license terms (required for CUSTOM type).
+     * @return licenseId The unique identifier for the created license.
+     */
     function createLicense(
         bytes32 _recordId,
         AxiomTypesV2.LicenseType _licenseType,
@@ -130,7 +143,14 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         emit LicenseCreated(licenseId, _recordId, msg.sender, _licenseType, _price);
     }
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Updates license terms (before any purchases).
+     * @dev Can only be updated if no licenses have been sold.
+     * @param _licenseId The License ID to update.
+     * @param _price The new price.
+     * @param _validUntil The new expiration timestamp.
+     * @param _exclusive The new exclusivity setting.
+     */
     function updateLicense(
         uint256 _licenseId,
         uint256 _price,
@@ -155,7 +175,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         license.exclusive = _exclusive;
     }
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Deactivates a license (no new purchases allowed).
+     * @dev Existing purchases remain valid until their expiration.
+     * @param _licenseId The License ID to deactivate.
+     */
     function deactivateLicense(uint256 _licenseId) external override {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         
@@ -174,7 +198,13 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     //                          LICENSE PURCHASE (NFT MINTING)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Purchases a license (mints License NFT to buyer).
+     * @dev Payment is distributed according to royalty split configuration.
+     * @param _licenseId The License template ID to purchase.
+     * @param _duration The requested license duration in seconds.
+     * @return tokenId The minted NFT token ID representing the license.
+     */
     function purchaseLicense(
         uint256 _licenseId,
         uint40 _duration
@@ -182,7 +212,14 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         return _purchaseLicense(_licenseId, msg.sender, _duration);
     }
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Purchases a license on behalf of another address (gift).
+     * @dev Mints the license NFT directly to the recipient.
+     * @param _licenseId The License template ID.
+     * @param _recipient The address to receive the license NFT.
+     * @param _duration The requested license duration.
+     * @return tokenId The minted NFT token ID.
+     */
     function purchaseLicenseFor(
         uint256 _licenseId,
         address _recipient,
@@ -342,7 +379,9 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * @notice Returns the number of tokens owned by an address
+     * @notice Returns the number of tokens owned by an address.
+     * @param _owner The address to query.
+     * @return The number of tokens owned.
      */
     function balanceOf(address _owner) external view returns (uint256) {
         require(_owner != address(0), "ERC721: balance query for zero address");
@@ -351,7 +390,9 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     }
 
     /**
-     * @notice Returns the owner of a token
+     * @notice Returns the owner of a token.
+     * @param _tokenId The Token ID to query.
+     * @return The address of the owner.
      */
     function ownerOf(uint256 _tokenId) public view tokenExists(_tokenId) returns (address) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
@@ -359,7 +400,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     }
 
     /**
-     * @notice Transfer token from one address to another
+     * @notice Transfers a token from one address to another.
+     * @dev Throws unless `msg.sender` is the current owner, an authorized operator, or the approved address for this token.
+     * @param _from The current owner of the token.
+     * @param _to The new owner.
+     * @param _tokenId The Token ID to transfer.
      */
     function transferFrom(
         address _from,
@@ -370,7 +415,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     }
 
     /**
-     * @notice Safely transfer token from one address to another
+     * @notice Safely transfers a token from one address to another.
+     * @dev Checks for ERC721Receiver implementation on destination.
+     * @param _from The current owner of the token.
+     * @param _to The new owner.
+     * @param _tokenId The Token ID to transfer.
      */
     function safeTransferFrom(
         address _from,
@@ -381,7 +430,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     }
 
     /**
-     * @notice Safely transfer token with data
+     * @notice Safely transfers a token with additional data.
+     * @param _from The current owner of the token.
+     * @param _to The new owner.
+     * @param _tokenId The Token ID to transfer.
+     * @param _data Additional data with no specified format, sent in call to `onERC721Received`.
      */
     function safeTransferFrom(
         address _from,
@@ -394,7 +447,10 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     }
 
     /**
-     * @notice Approve address to transfer token
+     * @notice Approves another address to transfer the given token ID.
+     * @dev The zero address indicates there is no approved address.
+     * @param _approved The address to be approved for the given token ID.
+     * @param _tokenId The Token ID to approve.
      */
     function approve(address _approved, uint256 _tokenId) external tokenExists(_tokenId) {
         address owner = ownerOf(_tokenId);
@@ -411,7 +467,10 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     }
 
     /**
-     * @notice Set approval for all tokens
+     * @notice Sets or unsets the approval of a given operator.
+     * @dev An operator is allowed to transfer all tokens of the sender on their behalf.
+     * @param _operator The operator to approve or remove.
+     * @param _approved True to approve the operator, false to revoke.
      */
     function setApprovalForAll(address _operator, bool _approved) external {
         require(_operator != msg.sender, "ERC721: approve to caller");
@@ -423,7 +482,9 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     }
 
     /**
-     * @notice Get approved address for token
+     * @notice Returns the account approved for the given token ID.
+     * @param _tokenId The Token ID to query.
+     * @return The approved address for this token, or the zero address if none.
      */
     function getApproved(uint256 _tokenId) public view tokenExists(_tokenId) returns (address) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
@@ -431,7 +492,10 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     }
 
     /**
-     * @notice Check if operator is approved for all tokens
+     * @notice Returns if the `_operator` is allowed to manage all of the assets of `_owner`.
+     * @param _owner The address that owns the tokens.
+     * @param _operator The address that acts on behalf of the owner.
+     * @return True if the operator is approved, false otherwise.
      */
     function isApprovedForAll(address _owner, address _operator) public view returns (bool) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
@@ -443,21 +507,25 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * @notice NFT collection name
+     * @notice Returns the name of the token collection.
+     * @return The name of the collection.
      */
     function name() external pure returns (string memory) {
         return "Axiom License";
     }
 
     /**
-     * @notice NFT collection symbol
+     * @notice Returns the symbol of the token collection.
+     * @return The symbol of the collection.
      */
     function symbol() external pure returns (string memory) {
         return "AXLICENSE";
     }
 
     /**
-     * @notice Generate token metadata URI
+     * @notice Returns the Uniform Resource Identifier (URI) for `_tokenId` token.
+     * @param _tokenId The Token ID to query.
+     * @return The metadata URI.
      */
     function tokenURI(uint256 _tokenId) external view tokenExists(_tokenId) returns (string memory) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
@@ -565,7 +633,14 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     //                          ERC-2981 ROYALTY INFO
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Returns royalty payment information for secondary sales.
+     * @dev ERC-2981 standard implementation.
+     * @param _tokenId The License NFT token ID.
+     * @param _salePrice The sale price of the NFT.
+     * @return receiver The address to receive royalty payment.
+     * @return royaltyAmount The amount of royalty to pay.
+     */
     function royaltyInfo(uint256 _tokenId, uint256 _salePrice)
         external view override(IAxiomLicense) tokenExists(_tokenId)
         returns (address receiver, uint256 royaltyAmount)
@@ -583,7 +658,13 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     //                          ROYALTY MANAGEMENT
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Sets the royalty distribution split for content.
+     * @dev Shares must sum to 10000 (100%).
+     * @param _recordId The content record ID.
+     * @param _recipients The array of royalty recipient addresses.
+     * @param _shares The array of share amounts in basis points.
+     */
     function setRoyaltySplit(
         bytes32 _recordId,
         address[] calldata _recipients,
@@ -616,20 +697,37 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         emit RoyaltySplitUpdated(_recordId, _recipients, _shares);
     }
 
-    /// @inheritdoc IAxiomLicense
-    function claimRoyalties(bytes32) external pure override returns (uint256) {
+    /**
+     * @notice Claims accumulated royalties for caller.
+     * @dev Not implemented in v1 - royalties auto-distributed on purchase.
+     * @param _recordId The content record ID (unused).
+     * @return amount Always returns 0.
+     */
+    function claimRoyalties(bytes32 _recordId) external pure override returns (uint256) {
         // Not implemented - royalties auto-distributed on purchase
         return 0;
     }
 
-    /// @inheritdoc IAxiomLicense
-    function claimRoyaltiesToken(bytes32, address) external pure override returns (uint256) {
+    /**
+     * @notice Claims royalties in a specific token.
+     * @dev Not implemented in v1.
+     * @param _recordId The content record ID (unused).
+     * @param _token The token address (unused).
+     * @return amount Always returns 0.
+     */
+    function claimRoyaltiesToken(bytes32 _recordId, address _token) external pure override returns (uint256) {
         // Not implemented - royalties auto-distributed on purchase
         return 0;
     }
 
-    /// @inheritdoc IAxiomLicense
-    function pendingRoyalties(address, bytes32) external pure override returns (uint256) {
+    /**
+     * @notice Gets pending royalties for an address.
+     * @dev Not implemented in v1.
+     * @param _recipient The address to check (unused).
+     * @param _recordId The content record ID (unused).
+     * @return pending Always returns 0.
+     */
+    function pendingRoyalties(address _recipient, bytes32 _recordId) external pure override returns (uint256) {
         // Not implemented - royalties auto-distributed on purchase
         return 0;
     }
@@ -638,12 +736,20 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     //                          SUBLICENSING (STUB)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Creates a sublicense from an existing license (stub).
+     * @dev Not implemented in v1.
+     * @return sublicenseId Reverts.
+     */
     function createSublicense(uint256, uint256, uint40) external pure override returns (uint256) {
         revert AxiomTypesV2.OperationNotPermitted(); // Not implemented in v1
     }
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Purchases a sublicense (stub).
+     * @dev Not implemented in v1.
+     * @return tokenId Reverts.
+     */
     function purchaseSublicense(uint256) external payable override returns (uint256) {
         revert AxiomTypesV2.OperationNotPermitted(); // Not implemented in v1
     }
@@ -652,7 +758,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     //                          QUERY FUNCTIONS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Retrieves license template information.
+     * @param _licenseId The License template ID.
+     * @return license The License struct.
+     */
     function getLicense(uint256 _licenseId) 
         external view override 
         returns (AxiomTypesV2.License memory) 
@@ -661,7 +771,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         return s.licenses[_licenseId];
     }
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Retrieves all license IDs for a record.
+     * @param _recordId The ID of the content record.
+     * @return licenseIds An array of license IDs.
+     */
     function getLicensesByRecord(bytes32 _recordId) 
         external view override 
         returns (uint256[] memory) 
@@ -670,7 +784,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         return s.recordLicenses[_recordId];
     }
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Retrieves all licenses owned by an address (Not Implemented).
+     * @dev Reverts with OperationNotPermitted.
+     * @return licenseIds Reverts.
+     */
     function getLicensesByOwner(address) 
         external pure override 
         returns (uint256[] memory) 
@@ -679,7 +797,14 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         revert AxiomTypesV2.OperationNotPermitted();
     }
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Checks if an address has a valid license for content.
+     * @dev Current implementation checks for token balance > 0 (simplified).
+     * @param _licensee The address to check.
+     * @param _recordId The ID of the content record.
+     * @return isValid True if the licensee holds a valid license.
+     * @return licenseType The type of license held.
+     */
     function hasValidLicense(address _licensee, bytes32 _recordId) 
         external view override 
         returns (bool isValid, AxiomTypesV2.LicenseType licenseType) 
@@ -697,7 +822,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         return (false, AxiomTypesV2.LicenseType.NONE);
     }
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Checks if a specific license NFT is still valid.
+     * @param _tokenId The License NFT token ID.
+     * @return isValid True if the license is registered, active, and not expired.
+     */
     function isLicenseValid(uint256 _tokenId) external view override returns (bool) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         
@@ -715,7 +844,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         return license.active;
     }
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Gets the royalty split configuration for content.
+     * @param _recordId The content record ID.
+     * @return split The RoyaltySplit struct.
+     */
     function getRoyaltySplit(bytes32 _recordId) 
         external view override 
         returns (AxiomTypesV2.RoyaltySplit memory) 
@@ -724,7 +857,12 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         return s.royaltySplits[_recordId];
     }
 
-    /// @inheritdoc IAxiomLicense
+    /**
+     * @notice Sets geographic restrictions for a license.
+     * @dev Restrictions are stored as IPFS URI.
+     * @param _licenseId The License ID to update.
+     * @param _restrictionsURI The new restrictions IPFS URI.
+     */
     function setTerritoryRestrictions(uint256 _licenseId, string calldata _restrictionsURI) external override {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         

@@ -123,7 +123,13 @@ contract AxiomDIDRegistry is IAxiomDID {
     //                          DID REGISTRATION
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Registers a new DID linked to the caller's wallet address.
+     * @dev The DID string should follow did:ethr format. Requires non-empty DID and valid document hash.
+     * @param _did The full DID string (e.g., "did:ethr:1:0x123...").
+     * @param _didDocumentHash IPFS hash (CID) of the DID Document.
+     * @param _publicKeyJwk Public key in JWK format for signature verification.
+     */
     function registerDID(
         string calldata _did,
         bytes32 _didDocumentHash,
@@ -166,7 +172,11 @@ contract AxiomDIDRegistry is IAxiomDID {
         emit DIDRegistered(msg.sender, _did, _didDocumentHash);
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Updates an existing DID Document.
+     * @dev Only the identity owner can update their DID Document. DID must be active.
+     * @param _newDocumentHash The new IPFS hash of the updated DID Document.
+     */
     function updateDIDDocument(bytes32 _newDocumentHash) external override {
         DIDStorage storage s = _getDIDStorage();
         
@@ -188,7 +198,11 @@ contract AxiomDIDRegistry is IAxiomDID {
         );
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Sets the service endpoint for the DID.
+     * @dev Stores the endpoint URL in the registry. Emits DIDAttributeChanged.
+     * @param _serviceEndpoint The URL of the service endpoint.
+     */
     function setServiceEndpoint(string calldata _serviceEndpoint) external override {
         DIDStorage storage s = _getDIDStorage();
         
@@ -207,7 +221,10 @@ contract AxiomDIDRegistry is IAxiomDID {
         );
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Revokes (deactivates) the caller's DID permanently.
+     * @dev This action is irreversible. The DID cannot be re-activated.
+     */
     function revokeDID() external override {
         DIDStorage storage s = _getDIDStorage();
         
@@ -230,7 +247,13 @@ contract AxiomDIDRegistry is IAxiomDID {
     //                          DELEGATE MANAGEMENT
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Adds a delegate authorized to act on behalf of the identity.
+     * @dev Delegates can sign content registrations and other actions.
+     * @param _delegate The address of the delegate.
+     * @param _delegateType The type of delegation (keccak256 hash of type string).
+     * @param _validity The duration in seconds for which the delegation is valid.
+     */
     function addDelegate(
         address _delegate,
         bytes32 _delegateType,
@@ -269,7 +292,12 @@ contract AxiomDIDRegistry is IAxiomDID {
         );
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Revokes a delegate's authorization.
+     * @dev Immediately invalidates the delegate regardless of original validity period.
+     * @param _delegate The address of the delegate to revoke.
+     * @param _delegateType The type of delegation being revoked.
+     */
     function revokeDelegate(address _delegate, bytes32 _delegateType) external override {
         DIDStorage storage s = _getDIDStorage();
         
@@ -294,7 +322,13 @@ contract AxiomDIDRegistry is IAxiomDID {
         );
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Checks if a delegate is currently valid for an identity.
+     * @param _identity The identity (DID owner) address.
+     * @param _delegateType The type of delegation to check.
+     * @param _delegate The address of the potential delegate.
+     * @return isValid True if the delegate is active and the validity period has not expired.
+     */
     function validDelegate(
         address _identity,
         bytes32 _delegateType,
@@ -310,7 +344,11 @@ contract AxiomDIDRegistry is IAxiomDID {
         return validTo > block.timestamp;
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Retrieves all active delegates for an identity.
+     * @param _identity The identity address.
+     * @return delegates An array of DIDDelegate structs representing active delegates.
+     */
     function getDelegates(address _identity) 
         external view override 
         returns (AxiomTypesV2.DIDDelegate[] memory delegates) 
@@ -368,7 +406,12 @@ contract AxiomDIDRegistry is IAxiomDID {
     //                     VERIFICATION LEVEL MANAGEMENT
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Sets the verification level for an identity.
+     * @dev Requires VERIFIER_ROLE. Verification is performed off-chain.
+     * @param _user The address of the identity to verify.
+     * @param _level The new verification level to assign.
+     */
     function setVerificationLevel(
         address _user,
         AxiomTypesV2.VerificationLevel _level
@@ -383,7 +426,11 @@ contract AxiomDIDRegistry is IAxiomDID {
         emit VerificationLevelChanged(_user, oldLevel, _level, msg.sender);
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Retrieves the current verification level for an identity.
+     * @param _user The address to check.
+     * @return level The current verification level.
+     */
     function getVerificationLevel(address _user) 
         external view override 
         returns (AxiomTypesV2.VerificationLevel level) 
@@ -392,7 +439,12 @@ contract AxiomDIDRegistry is IAxiomDID {
         return s.identities[_user].level;
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Checks if an identity meets a minimum verification requirement.
+     * @param _user The address to check.
+     * @param _minLevel The minimum required verification level.
+     * @return meetsRequirement True if the identity's level is greater than or equal to _minLevel.
+     */
     function meetsVerificationLevel(
         address _user,
         AxiomTypesV2.VerificationLevel _minLevel
@@ -410,7 +462,11 @@ contract AxiomDIDRegistry is IAxiomDID {
     //                            DID RESOLUTION
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Resolves a DID string to its full identity information.
+     * @param _did The DID string to resolve.
+     * @return identity The full DIDIdentity struct.
+     */
     function resolveDID(string calldata _did) 
         external view override 
         returns (AxiomTypesV2.DIDIdentity memory identity) 
@@ -427,7 +483,11 @@ contract AxiomDIDRegistry is IAxiomDID {
         return s.identities[owner];
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Retrieves the identity information for a wallet address.
+     * @param _user The wallet address to look up.
+     * @return identity The full DIDIdentity struct.
+     */
     function getIdentity(address _user) 
         external view override 
         returns (AxiomTypesV2.DIDIdentity memory identity) 
@@ -436,13 +496,21 @@ contract AxiomDIDRegistry is IAxiomDID {
         return s.identities[_user];
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Checks if an address has a registered DID.
+     * @param _user The address to check.
+     * @return exists True if a DID exists for this address.
+     */
     function hasDID(address _user) external view override returns (bool exists) {
         DIDStorage storage s = _getDIDStorage();
         return bytes(s.identities[_user].did).length > 0;
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Checks if a DID is currently active.
+     * @param _user The address of the DID owner.
+     * @return active True if the DID is registered, active, and not expired.
+     */
     function isDIDActive(address _user) external view override returns (bool active) {
         DIDStorage storage s = _getDIDStorage();
         
@@ -464,7 +532,11 @@ contract AxiomDIDRegistry is IAxiomDID {
         return true;
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Retrieves the DID string for an address.
+     * @param _user The address to look up.
+     * @return did The DID string.
+     */
     function getDIDString(address _user) 
         external view override 
         returns (string memory did) 
@@ -477,7 +549,13 @@ contract AxiomDIDRegistry is IAxiomDID {
     //                      ERC-1056 ATTRIBUTE MANAGEMENT
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Sets an attribute for a DID (ERC-1056 compatible).
+     * @dev Attributes are stored with a validity period.
+     * @param _name The attribute name (hashed).
+     * @param _value The attribute value.
+     * @param _validity The duration in seconds for which the attribute is valid.
+     */
     function setAttribute(
         bytes32 _name,
         bytes calldata _value,
@@ -504,7 +582,12 @@ contract AxiomDIDRegistry is IAxiomDID {
         );
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Revokes an attribute.
+     * @dev Sets the attribute validity to 0.
+     * @param _name The attribute name to revoke.
+     * @param _value The attribute value to match for revocation.
+     */
     function revokeAttribute(bytes32 _name, bytes calldata _value) external override {
         DIDStorage storage s = _getDIDStorage();
         
@@ -536,7 +619,14 @@ contract AxiomDIDRegistry is IAxiomDID {
     //                          SIGNATURE VALIDATION
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Verifies if a signature was made by a valid identity or delegate.
+     * @param _identity The claimed identity (DID owner).
+     * @param _hash The message hash that was signed.
+     * @param _signature The signature to verify.
+     * @return isValid True if the signature is valid.
+     * @return signer The address that signed the message.
+     */
     function verifySignature(
         address _identity,
         bytes32 _hash,
@@ -562,7 +652,11 @@ contract AxiomDIDRegistry is IAxiomDID {
         return (false, signer);
     }
 
-    /// @inheritdoc IAxiomDID
+    /**
+     * @notice Retrieves the current nonce for an identity (for replay protection).
+     * @param _identity The identity address.
+     * @return The current nonce value.
+     */
     function nonce(address _identity) external view override returns (uint256) {
         DIDStorage storage s = _getDIDStorage();
         return s.nonces[_identity];

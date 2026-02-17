@@ -20,6 +20,9 @@ import {AxiomLicenseFacet} from "../src/core/AxiomLicenseFacet.sol";
 import {AxiomDisputeFacet} from "../src/core/AxiomDisputeFacet.sol";
 import {AxiomPrivacyFacet} from "../src/core/AxiomPrivacyFacet.sol";
 
+// Mock ZK Verifier (always returns true — test-only)
+import {MockVerifier} from "./mocks/MockVerifier.sol";
+
 // Interface
 import {AxiomFacets} from "../src/interfaces/AxiomFacets.sol";
 
@@ -49,6 +52,7 @@ contract IntegrationTest is Test {
     AxiomLicenseFacet public licenseFacet;
     AxiomDisputeFacet public disputeFacet;
     AxiomPrivacyFacet public privacyFacet;
+    MockVerifier public mockVerifier;
 
     // Test actors
     address public admin = address(0xAD);
@@ -83,6 +87,7 @@ contract IntegrationTest is Test {
         licenseFacet = new AxiomLicenseFacet();
         disputeFacet = new AxiomDisputeFacet();
         privacyFacet = new AxiomPrivacyFacet();
+        mockVerifier = new MockVerifier();
 
         // Wire all facets (Diamond Cut)
         vm.startPrank(admin);
@@ -94,6 +99,10 @@ contract IntegrationTest is Test {
         _wireLicenseFacet();
         _wireDisputeFacet();
         _wirePrivacyFacet();
+
+        // Configure ZK verifier: inject MockVerifier for testing
+        // In production, this would be the real Groth16Verifier address
+        diamond.setZKVerifier(address(mockVerifier));
 
         // Grant operator role
         bytes32 operatorRole = router.OPERATOR_ROLE();
@@ -184,7 +193,7 @@ contract IntegrationTest is Test {
         bytes32 privateContentHash = keccak256("my-secret-content");
         bytes32 commitment = keccak256(abi.encodePacked(creator, "secret", "nullifier"));
         bytes32 nullifierHash = keccak256(abi.encodePacked("nullifier", privateContentHash));
-        bytes memory validProof = bytes("valid"); // Mock ZK proof
+        bytes memory validProof = _buildDummyProof(); // ABI-encoded Groth16 dummy proof
 
         vm.prank(creator);
         bytes32 privateRecordId = diamond.privateRegister{value: 0}(
@@ -230,7 +239,7 @@ contract IntegrationTest is Test {
         bytes32 contentHash = keccak256("unique-content");
         bytes32 commitment = keccak256("commitment1");
         bytes32 nullifierHash = keccak256("nullifier1");
-        bytes memory validProof = bytes("valid");
+        bytes memory validProof = _buildDummyProof();
 
         vm.prank(creator);
         diamond.privateRegister(contentHash, commitment, nullifierHash, validProof, "");
@@ -256,10 +265,12 @@ contract IntegrationTest is Test {
         bytes32 contentHash = keccak256("content");
         bytes32 commitment = keccak256("commitment");
         bytes32 nullifierHash = keccak256("nullifier");
+        // Raw bytes that are NOT valid ABI-encoded (uint[2], uint[2][2], uint[2])
+        // This will cause abi.decode to revert inside the facet
         bytes memory invalidProof = bytes("invalid-garbage-proof");
 
         vm.prank(creator);
-        vm.expectRevert(AxiomTypesV2.InvalidZKProof.selector);
+        vm.expectRevert(); // abi.decode will revert on malformed data
         diamond.privateRegister(contentHash, commitment, nullifierHash, invalidProof, "");
     }
 
@@ -270,7 +281,7 @@ contract IntegrationTest is Test {
         bytes32 contentHash = keccak256("content");
         bytes32 commitment = keccak256("real-commitment");
         bytes32 nullifierHash = keccak256("nullifier");
-        bytes memory validProof = bytes("valid");
+        bytes memory validProof = _buildDummyProof();
 
         vm.prank(creator);
         bytes32 recordId = diamond.privateRegister(
@@ -312,7 +323,7 @@ contract IntegrationTest is Test {
      */
     function test_PrivacyRecordsByCommitment() public {
         bytes32 commitment = keccak256("shared-commitment");
-        bytes memory validProof = bytes("valid");
+        bytes memory validProof = _buildDummyProof();
 
         // Register multiple private records with same commitment
         vm.startPrank(creator);
@@ -454,7 +465,7 @@ contract IntegrationTest is Test {
     }
 
     function _wirePrivacyFacet() internal {
-        bytes4[] memory sel = new bytes4[](10);
+        bytes4[] memory sel = new bytes4[](12);
         sel[0] = AxiomPrivacyFacet.privateRegister.selector;
         sel[1] = AxiomPrivacyFacet.verifyOwnership.selector;
         sel[2] = AxiomPrivacyFacet.requestErasure.selector;
@@ -465,6 +476,25 @@ contract IntegrationTest is Test {
         sel[7] = AxiomPrivacyFacet.isMetadataDeleted.selector;
         sel[8] = AxiomPrivacyFacet.getGDPRRequest.selector;
         sel[9] = AxiomPrivacyFacet.getRecordsByCommitment.selector;
+        sel[10] = AxiomPrivacyFacet.setZKVerifier.selector;
+        sel[11] = AxiomPrivacyFacet.getZKVerifier.selector;
         router.addFacetSelectors(address(privacyFacet), sel);
+    }
+
+    // ============ Proof Construction Helper ============
+
+    /**
+     * @notice Build a dummy ABI-encoded Groth16 proof
+     * @dev Constructs a properly ABI-encoded (uint[2], uint[2][2], uint[2]) so that
+     *      abi.decode inside AxiomPrivacyFacet does not revert.
+     *      The MockVerifier will return true regardless of these values.
+     *
+     *      In production, these values would come from snarkjs/circom proof generation.
+     */
+    function _buildDummyProof() internal pure returns (bytes memory) {
+        uint256[2] memory a = [uint256(0), uint256(0)];
+        uint256[2][2] memory b = [[uint256(0), uint256(0)], [uint256(0), uint256(0)]];
+        uint256[2] memory c = [uint256(0), uint256(0)];
+        return abi.encode(a, b, c);
     }
 }

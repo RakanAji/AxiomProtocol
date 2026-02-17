@@ -55,7 +55,14 @@ contract AxiomDisputeFacet is IAxiomDispute {
     //                          DISPUTE INITIATION
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Initiates a new dispute against a content record.
+     * @dev Supports ETH staking. Checks for active disputes and minimum stake.
+     * @param _recordId The ID of the content being disputed.
+     * @param _reason The reason for the dispute.
+     * @param _evidenceURI IPFS URI containing evidence for the dispute.
+     * @return disputeId The unique ID of the created dispute.
+     */
     function initiateDispute(
         bytes32 _recordId,
         AxiomTypesV2.DisputeReason _reason,
@@ -78,7 +85,16 @@ contract AxiomDisputeFacet is IAxiomDispute {
         );
     }
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Initiates a new dispute using an ERC-20 token for staking.
+     * @dev Requires token allowance. Transfers tokens to contract.
+     * @param _recordId The ID of the content being disputed.
+     * @param _reason The reason for the dispute.
+     * @param _evidenceURI IPFS URI containing evidence for the dispute.
+     * @param _stakeToken The address of the ERC-20 token used for staking.
+     * @param _stakeAmount The amount of tokens to stake.
+     * @return disputeId The unique ID of the created dispute.
+     */
     function initiateDisputeWithToken(
         bytes32 _recordId,
         AxiomTypesV2.DisputeReason _reason,
@@ -162,7 +178,12 @@ contract AxiomDisputeFacet is IAxiomDispute {
     //                          RESPONSE & EVIDENCE
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Responds to a pending dispute (Content Owner only).
+     * @dev Sets status to EVIDENCE_PERIOD. Must be called within response period.
+     * @param _disputeId The ID of the dispute.
+     * @param _responseURI IPFS URI containing the counter-evidence/response.
+     */
     function respondToDispute(
         bytes32 _disputeId,
         string calldata _responseURI
@@ -199,7 +220,12 @@ contract AxiomDisputeFacet is IAxiomDispute {
         emit DisputeResponseSubmitted(_disputeId, msg.sender, _responseURI);
     }
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Submits additional evidence for an active dispute.
+     * @dev Can be called by either party during EVIDENCE_PERIOD or ARBITRATION.
+     * @param _disputeId The ID of the dispute.
+     * @param _evidenceURI IPFS URI containing information/evidence.
+     */
     function submitEvidence(
         bytes32 _disputeId,
         string calldata _evidenceURI
@@ -219,7 +245,12 @@ contract AxiomDisputeFacet is IAxiomDispute {
     //                       ARBITRATION ESCALATION
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Escalates a dispute to an external arbitrator.
+     * @dev Requires paying the arbitration fee. Status changes to ARBITRATION.
+     * @param _disputeId The ID of the dispute to escalate.
+     * @param _arbitrator The address of the chosen arbitrator contract.
+     */
     function escalateToArbitration(
         bytes32 _disputeId,
         address _arbitrator
@@ -264,7 +295,12 @@ contract AxiomDisputeFacet is IAxiomDispute {
         }
     }
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Executes a ruling from an external arbitrator.
+     * @dev Can only be called by the assigned arbitrator. Resolves the dispute.
+     * @param _externalDisputeId The dispute ID in the arbitrator's system.
+     * @param _ruling The ruling provided by the arbitrator.
+     */
     function rule(uint256 _externalDisputeId, uint256 _ruling) external override {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         
@@ -313,7 +349,11 @@ contract AxiomDisputeFacet is IAxiomDispute {
     //                          RESOLUTION & SETTLEMENT
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Resolves a dispute if the deadline has passed without response.
+     * @dev If PENDING and deadline passed, Challenger wins. If EVIDENCE_PERIOD and escalation deadline passed, Owner wins.
+     * @param _disputeId The ID of the dispute.
+     */
     function resolveByTimeout(bytes32 _disputeId) external override {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         AxiomTypesV2.Dispute storage dispute = s.disputes[_disputeId];
@@ -336,12 +376,19 @@ contract AxiomDisputeFacet is IAxiomDispute {
         }
     }
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Settles a dispute via mutual agreement.
+     * @dev Distributes stake according to agreed shares. Requires signatures from both parties.
+     * @param _disputeId The ID of the dispute.
+     * @param _challengerShare Basis points (0-10000) of the stake going to the challenger.
+     * @param _ownerSignature Signature of the content owner approving settlement.
+     * @param _challengerSignature Signature of the challenger approving settlement.
+     */
     function settleDispute(
         bytes32 _disputeId,
         uint16 _challengerShare,
-        bytes calldata /*_ownerSignature*/,
-        bytes calldata /*_challengerSignature*/
+        bytes calldata _ownerSignature,
+        bytes calldata _challengerSignature
     ) external override {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         AxiomTypesV2.Dispute storage dispute = s.disputes[_disputeId];
@@ -361,7 +408,12 @@ contract AxiomDisputeFacet is IAxiomDispute {
     //                          STAKING & REWARDS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Claims the stake (and reward) after a dispute is resolved.
+     * @dev Can be called by the winner. Transfers tokens/ETH.
+     * @param _disputeId The ID of the resolved dispute.
+     * @return amount The total amount claimed.
+     */
     function claimStake(bytes32 _disputeId) external override nonReentrant returns (uint256 amount) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         AxiomTypesV2.Dispute storage dispute = s.disputes[_disputeId];
@@ -432,20 +484,32 @@ contract AxiomDisputeFacet is IAxiomDispute {
     //                          ARBITRATOR MANAGEMENT
     // ═══════════════════════════════════════════════════════════════════════════
     
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Retrieves the list of approved arbitrator addresses.
+     * @return The array of approved arbitrator addresses.
+     */
     function getApprovedArbitrators() external view override returns (address[] memory) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         return s.arbitratorList;
     }
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Checks if a specific arbitrator is approved.
+     * @param _arbitrator The address of the arbitrator to check.
+     * @return True if the arbitrator is approved, false otherwise.
+     */
     function isArbitratorApproved(address _arbitrator) external view override returns (bool) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         return s.approvedArbitrators[_arbitrator];
     }
 
-    /// @inheritdoc IAxiomDispute
-    function getArbitratorFee(address _arbitrator, AxiomTypesV2.DisputeReason) 
+    /**
+     * @notice Gets the fee required by an arbitrator for a specific dispute reason.
+     * @param _arbitrator The address of the arbitrator.
+     * @param _reason The dispute reason (unused in current implementation implies base cost).
+     * @return The arbitration cost in wei.
+     */
+    function getArbitratorFee(address _arbitrator, AxiomTypesV2.DisputeReason _reason) 
         external view override returns (uint256) 
     {
         return IArbitrator(_arbitrator).arbitrationCost("");
@@ -455,14 +519,22 @@ contract AxiomDisputeFacet is IAxiomDispute {
     //                          APPEALS (STUB)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Appeals a dispute ruling (Not Implemented).
+     * @dev Reverts with OperationNotPermitted.
+     * @return disputeId The ID of the appeal.
+     */
     function appeal(bytes32, string calldata) 
         external payable override returns (bytes32) 
     {
         revert AxiomTypesV2.OperationNotPermitted(); // Not implemented in v1
     }
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Gets the deadline for appealing a dispute.
+     * @dev Always returns 0 as appeals are not implemented.
+     * @return The appeal deadline timestamp.
+     */
     function getAppealDeadline(bytes32) external pure override returns (uint256) {
         return 0; // Not implemented
     }
@@ -471,7 +543,11 @@ contract AxiomDisputeFacet is IAxiomDispute {
     //                          DISPUTE QUERIES
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Retrieves full details of a dispute.
+     * @param _disputeId The ID of the dispute.
+     * @return The Dispute struct containing all details.
+     */
     function getDispute(bytes32 _disputeId) 
         external view override returns (AxiomTypesV2.Dispute memory) 
     {
@@ -479,25 +555,40 @@ contract AxiomDisputeFacet is IAxiomDispute {
         return s.disputes[_disputeId];
     }
     
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Retrieves all dispute IDs associated with a record.
+     * @param _recordId The ID of the content record.
+     * @return An array of dispute IDs.
+     */
     function getDisputesByRecord(bytes32 _recordId) external view override returns (bytes32[] memory) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         return s.recordDisputes[_recordId];
     }
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Retrieves all dispute IDs initiated by a challenger.
+     * @param _challenger The address of the challenger.
+     * @return An array of dispute IDs.
+     */
     function getDisputesByChallenger(address _challenger) external view override returns (bytes32[] memory) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         return s.challengerDisputes[_challenger];
     }
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Retrieves active disputes with pagination (Not Implemented).
+     * @return An empty array of dispute IDs.
+     */
     function getActiveDisputes(uint256, uint256) external pure override returns (bytes32[] memory) {
         // Not implemented for gas efficiency
         return new bytes32[](0);
     }
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Checks if a record has any active (unresolved) disputes.
+     * @param _recordId The ID of the content record.
+     * @return True if there is an active dispute, false otherwise.
+     */
     function hasActiveDispute(bytes32 _recordId) public view override returns (bool) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         bytes32[] memory ids = s.recordDisputes[_recordId];
@@ -511,13 +602,19 @@ contract AxiomDisputeFacet is IAxiomDispute {
                lastDispute.status == AxiomTypesV2.DisputeStatus.APPEALED;
     }
 
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Retrieves the current global staking configuration.
+     * @return The StakeConfig struct.
+     */
     function getStakeConfig() external view override returns (AxiomTypesV2.StakeConfig memory) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         return s.stakeConfig;
     }
     
-    /// @inheritdoc IAxiomDispute
+    /**
+     * @notice Retrieves the minimum stake required for a dispute.
+     * @return The minimum stake amount in wei.
+     */
     function getMinimumStake(bytes32) external view override returns (uint256) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         return s.stakeConfig.minStakeAmount;
