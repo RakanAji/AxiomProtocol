@@ -231,6 +231,13 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         return _purchaseLicense(_licenseId, _recipient, _duration);
     }
 
+    /**
+     * @dev Internal logic for license purchase.
+     *      CEI: ALL state changes (mint NFT, write purchase data, set exclusive flag)
+     *      happen BEFORE _processPayment which makes external calls.
+     *      This prevents ERC-777 tokensToSend reentrancy from bypassing the
+     *      exclusive license check and minting duplicate NFTs.
+     */
     function _purchaseLicense(
         uint256 _licenseId,
         address _recipient,
@@ -240,7 +247,7 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         
         AxiomTypesV2.License storage license = s.licenses[_licenseId];
         
-        // Validations
+        // CHECKS
         if (!license.active) {
             revert AxiomTypesV2.LicenseNotFound(_licenseId);
         }
@@ -249,25 +256,23 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
             revert AxiomTypesV2.LicenseAlreadyPurchased(_licenseId);
         }
         
-        // Check expiry
         if (license.validUntil > 0 && license.validUntil < block.timestamp) {
             revert AxiomTypesV2.LicenseExpired(_licenseId, license.validUntil);
         }
 
-        // Process payment
         uint256 price = license.price;
-        _processPayment(license.paymentToken, price, license.licensor, license.recordId);
 
+        // EFFECTS: Write ALL state BEFORE any external calls
         // Initialize token counter if needed
         if (s.nextTokenId == 0) {
             s.nextTokenId = 1;
         }
 
-        // Mint NFT
+        // Mint NFT (state-only, no external calls)
         tokenId = s.nextTokenId++;
         _mint(_recipient, tokenId);
 
-        // Record purchase
+        // Record purchase data
         uint40 expiresAt = _duration > 0 ? uint40(block.timestamp) + _duration : license.validUntil;
         
         s.tokenLicenseData[tokenId] = AxiomTypesV2.LicensePurchase({
@@ -279,14 +284,25 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
             expiresAt: expiresAt
         });
 
-        // Mark exclusive license
+        // Mark exclusive license BEFORE payment interaction
+        // This is the critical fix: if an ERC-777 hook re-enters purchaseLicense,
+        // the exclusive check above will now correctly revert
         if (license.exclusive) {
             license.licensee = _recipient;
         }
 
         emit LicensePurchased(_licenseId, tokenId, _recipient, price);
+
+        // INTERACTION: Process payment (external calls) LAST
+        _processPayment(license.paymentToken, price, license.licensor, license.recordId);
     }
 
+    /**
+     * @dev Process payment for license purchase.
+     *      CEI: This is called AFTER all state is written in _purchaseLicense.
+     *      For ERC-20: safeTransferFrom is the external call (interaction).
+     *      For ETH: .call is the external call (interaction).
+     */
     function _processPayment(
         address _token,
         uint256 _amount,
@@ -307,10 +323,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
                 revert AxiomTypesV2.InsufficientFee(msg.value, _amount);
             }
 
+            // INTERACTIONS: All external calls grouped together
             // Send to treasury
             address treasury = s.licenseTreasury != address(0) ? s.licenseTreasury : s.treasuryWallet;
             (bool success1,) = payable(treasury).call{value: protocolFee}("");
-            require(success1, "Treasury transfer failed");
+            require(success1, "LicenseFacet: Treasury transfer failed");
 
             // Check if there's a royalty split
             AxiomTypesV2.RoyaltySplit storage split = s.royaltySplits[_recordId];
@@ -319,26 +336,26 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
             } else {
                 // Send all to licensor
                 (bool success2,) = payable(_licensor).call{value: licensorAmount}("");
-                require(success2, "Licensor transfer failed");
+                require(success2, "LicenseFacet: Licensor transfer failed");
             }
 
             // Refund excess
             if (msg.value > _amount) {
                 (bool success3,) = payable(msg.sender).call{value: msg.value - _amount}("");
-                require(success3, "Refund failed");
+                require(success3, "LicenseFacet: Refund failed");
             }
         } else {
             // ERC-20 payment
             IERC20 token = IERC20(_token);
             
-            // Transfer to contract first
+            // Pull tokens from buyer
             token.safeTransferFrom(msg.sender, address(this), _amount);
             
-            // Send protocol fee
+            // Distribute: protocol fee
             address treasury = s.licenseTreasury != address(0) ? s.licenseTreasury : s.treasuryWallet;
             token.safeTransfer(treasury, protocolFee);
 
-            // Check royalty split
+            // Distribute: licensor / royalty split
             AxiomTypesV2.RoyaltySplit storage split = s.royaltySplits[_recordId];
             if (split.recipients.length > 0) {
                 _distributeRoyaltiesERC20(token, licensorAmount, split);
@@ -402,6 +419,7 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     /**
      * @notice Transfers a token from one address to another.
      * @dev Throws unless `msg.sender` is the current owner, an authorized operator, or the approved address for this token.
+     *      nonReentrant: prevents state manipulation during concurrent operations.
      * @param _from The current owner of the token.
      * @param _to The new owner.
      * @param _tokenId The Token ID to transfer.
@@ -410,13 +428,14 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         address _from,
         address _to,
         uint256 _tokenId
-    ) external {
+    ) external nonReentrant {
         _transfer(_from, _to, _tokenId);
     }
 
     /**
      * @notice Safely transfers a token from one address to another.
      * @dev Checks for ERC721Receiver implementation on destination.
+     *      nonReentrant: onERC721Received callback is an external call to untrusted code.
      * @param _from The current owner of the token.
      * @param _to The new owner.
      * @param _tokenId The Token ID to transfer.
@@ -425,12 +444,13 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         address _from,
         address _to,
         uint256 _tokenId
-    ) external {
-        safeTransferFrom(_from, _to, _tokenId, "");
+    ) external nonReentrant {
+        _safeTransfer(_from, _to, _tokenId, "");
     }
 
     /**
      * @notice Safely transfers a token with additional data.
+     * @dev nonReentrant: onERC721Received is an external call to untrusted code.
      * @param _from The current owner of the token.
      * @param _to The new owner.
      * @param _tokenId The Token ID to transfer.
@@ -441,7 +461,20 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         address _to,
         uint256 _tokenId,
         bytes memory _data
-    ) public {
+    ) public nonReentrant {
+        _safeTransfer(_from, _to, _tokenId, _data);
+    }
+
+    /**
+     * @dev Internal safe transfer logic — separated from the public function
+     *      so that the nonReentrant modifier is only on the external entry points.
+     */
+    function _safeTransfer(
+        address _from,
+        address _to,
+        uint256 _tokenId,
+        bytes memory _data
+    ) internal {
         _transfer(_from, _to, _tokenId);
         _checkOnERC721Received(_from, _to, _tokenId, _data);
     }
@@ -449,10 +482,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     /**
      * @notice Approves another address to transfer the given token ID.
      * @dev The zero address indicates there is no approved address.
+     *      nonReentrant: defense-in-depth in shared Diamond storage.
      * @param _approved The address to be approved for the given token ID.
      * @param _tokenId The Token ID to approve.
      */
-    function approve(address _approved, uint256 _tokenId) external tokenExists(_tokenId) {
+    function approve(address _approved, uint256 _tokenId) external nonReentrant tokenExists(_tokenId) {
         address owner = ownerOf(_tokenId);
         require(_approved != owner, "ERC721: approval to current owner");
         require(

@@ -88,6 +88,8 @@ contract AxiomDisputeFacet is IAxiomDispute {
     /**
      * @notice Initiates a new dispute using an ERC-20 token for staking.
      * @dev Requires token allowance. Transfers tokens to contract.
+     *      CEI: State is written in _initiateDispute BEFORE the safeTransferFrom
+     *      interaction, preventing ERC-777 tokensToSend reentrancy attacks.
      * @param _recordId The ID of the content being disputed.
      * @param _reason The reason for the dispute.
      * @param _evidenceURI IPFS URI containing evidence for the dispute.
@@ -104,15 +106,13 @@ contract AxiomDisputeFacet is IAxiomDispute {
     ) external override nonReentrant returns (bytes32 disputeId) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         
-        // Verify configured token
+        // CHECK: Verify configured token
         if (_stakeToken != s.stakeConfig.stakeToken) {
             revert AxiomTypesV2.OperationNotPermitted();
         }
 
-        // Transfer tokens
-        IERC20(_stakeToken).safeTransferFrom(msg.sender, address(this), _stakeAmount);
-
-        return _initiateDispute(
+        // EFFECT: Write dispute state BEFORE external call (CEI)
+        disputeId = _initiateDispute(
             s, 
             _recordId, 
             _reason, 
@@ -120,6 +120,11 @@ contract AxiomDisputeFacet is IAxiomDispute {
             _stakeToken, 
             _stakeAmount
         );
+
+        // INTERACTION: Transfer tokens AFTER state is written
+        // Safe against ERC-777 tokensToSend reentrancy: dispute already
+        // exists in storage, so hasActiveDispute() will block re-entry
+        IERC20(_stakeToken).safeTransferFrom(msg.sender, address(this), _stakeAmount);
     }
 
     function _initiateDispute(
@@ -248,6 +253,7 @@ contract AxiomDisputeFacet is IAxiomDispute {
     /**
      * @notice Escalates a dispute to an external arbitrator.
      * @dev Requires paying the arbitration fee. Status changes to ARBITRATION.
+     *      CEI: All state is written BEFORE external calls (arbitrator + refund).
      * @param _disputeId The ID of the dispute to escalate.
      * @param _arbitrator The address of the chosen arbitrator contract.
      */
@@ -258,6 +264,7 @@ contract AxiomDisputeFacet is IAxiomDispute {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         AxiomTypesV2.Dispute storage dispute = s.disputes[_disputeId];
         
+        // CHECKS
         if (dispute.status != AxiomTypesV2.DisputeStatus.EVIDENCE_PERIOD) {
             revert AxiomTypesV2.InvalidDisputeStatus(
                 _disputeId,
@@ -270,7 +277,7 @@ contract AxiomDisputeFacet is IAxiomDispute {
             revert AxiomTypesV2.OperationNotPermitted();
         }
 
-        // Calculate arbitration cost
+        // Calculate arbitration cost (view call — safe)
         IArbitrator arbitrator = IArbitrator(_arbitrator);
         uint256 arbitrationFee = arbitrator.arbitrationCost("");
         
@@ -278,20 +285,26 @@ contract AxiomDisputeFacet is IAxiomDispute {
             revert AxiomTypesV2.InsufficientFee(msg.value, arbitrationFee);
         }
 
-        // Create dispute in arbitrator
-        uint256 externalId = arbitrator.createDispute{value: arbitrationFee}(RULING_OPTIONS, "");
-        
+        // EFFECTS: Write ALL state BEFORE external calls
         dispute.status = AxiomTypesV2.DisputeStatus.ARBITRATION;
         dispute.arbitrator = _arbitrator;
-        dispute.externalDisputeId = bytes32(externalId);
+        // Note: externalDisputeId will be set after createDispute returns,
+        // but status is already ARBITRATION so re-entry is blocked
+
+        // INTERACTION #1: Create dispute in arbitrator
+        uint256 externalId = arbitrator.createDispute{value: arbitrationFee}(RULING_OPTIONS, "");
         
+        // Post-interaction state update (safe: status already changed,
+        // nonReentrant blocks re-entry)
+        dispute.externalDisputeId = bytes32(externalId);
         s.externalDisputeMapping[_arbitrator][externalId] = _disputeId;
 
         emit DisputeEscalated(_disputeId, _arbitrator, bytes32(externalId));
         
-        // Refund excess fee
+        // INTERACTION #2: Refund excess fee using call (supports smart contract wallets)
         if (msg.value > arbitrationFee) {
-            payable(msg.sender).transfer(msg.value - arbitrationFee);
+            (bool success,) = payable(msg.sender).call{value: msg.value - arbitrationFee}("");
+            require(success, "DisputeFacet: Refund failed");
         }
     }
 
@@ -352,9 +365,10 @@ contract AxiomDisputeFacet is IAxiomDispute {
     /**
      * @notice Resolves a dispute if the deadline has passed without response.
      * @dev If PENDING and deadline passed, Challenger wins. If EVIDENCE_PERIOD and escalation deadline passed, Owner wins.
+     *      nonReentrant: prevents state manipulation during concurrent claimStake calls.
      * @param _disputeId The ID of the dispute.
      */
-    function resolveByTimeout(bytes32 _disputeId) external override {
+    function resolveByTimeout(bytes32 _disputeId) external override nonReentrant {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         AxiomTypesV2.Dispute storage dispute = s.disputes[_disputeId];
         
@@ -389,7 +403,7 @@ contract AxiomDisputeFacet is IAxiomDispute {
         uint16 _challengerShare,
         bytes calldata _ownerSignature,
         bytes calldata _challengerSignature
-    ) external override {
+    ) external override nonReentrant {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         AxiomTypesV2.Dispute storage dispute = s.disputes[_disputeId];
         
@@ -465,7 +479,10 @@ contract AxiomDisputeFacet is IAxiomDispute {
         if (_amount == 0) return;
         
         if (_token == address(0)) {
-            payable(_to).transfer(_amount);
+            // Use call instead of transfer — transfer forwards only 2300 gas,
+            // which fails for smart contract wallets (Gnosis Safe, etc.)
+            (bool success,) = payable(_to).call{value: _amount}("");
+            require(success, "DisputeFacet: ETH transfer failed");
         } else {
             IERC20(_token).safeTransfer(_to, _amount);
         }
