@@ -5,8 +5,8 @@ pragma solidity ^0.8.24;
  * @title IZKVerifier
  * @author Axiom Protocol Team
  * @notice Interface for Zero-Knowledge Proof Verifier (Groth16-compatible)
- * @dev Defines the standard Groth16 verification signature used by both
- *      the production Groth16Verifier and the test MockVerifier.
+ * @dev Defines the standard Groth16 verification signature used by generated
+ *      production verifiers and test/reference verifier implementations.
  *
  *      Proof structure (Groth16):
  *        - pA ∈ G1: [x, y] — first proof element
@@ -15,7 +15,7 @@ pragma solidity ^0.8.24;
  *        - pubSignals: array of public circuit inputs
  *
  *      Implementations:
- *        - Groth16Verifier (production): Full BN254 pairing verification
+ *        - Groth16Verifier (placeholder reference): BN254 structure with a non-production key
  *        - MockVerifier (testing): Always returns true
  */
 interface IZKVerifier {

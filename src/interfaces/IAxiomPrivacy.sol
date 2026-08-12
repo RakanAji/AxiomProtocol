@@ -35,8 +35,9 @@ interface IAxiomPrivacy {
      *      The nullifier prevents the same identity from double-registering
      *
      *      ZK Circuit Public Inputs:
-     *      - commitment (computed from address + secrets)
-     *      - nullifierHash (computed from nullifier + contentHash)
+     *      - H(domain, purpose, caller, "commitment", commitment) mapped into the field
+     *      - H(domain, purpose, caller, "nullifier", nullifierHash) mapped into the field
+     *      - H(domain, purpose, caller, "content", contentHash) mapped into the field
      *
      *      ZK Circuit Private Inputs:
      *      - address (user's wallet address)
@@ -47,7 +48,8 @@ interface IAxiomPrivacy {
      *      - ZK proof must be valid
      *      - Nullifier hash must not have been used before
      *      - Content hash must be non-zero
-     *      - Correct fee must be paid
+     *      - Content hash and nullifier must not have been used before
+     *      - No ETH is accepted
      *
      *      Emits {PrivateContentRegistered} event
      *
@@ -66,32 +68,14 @@ interface IAxiomPrivacy {
         string calldata _metadataURI
     ) external payable returns (bytes32 recordId);
 
-    /**
-     * @notice Batch private registration with multiple ZK proofs
-     * @dev More gas efficient than individual registrations
-     *
-     * @param _contentHashes Array of content hashes
-     * @param _commitments Array of commitments
-     * @param _nullifierHashes Array of nullifier hashes
-     * @param _zkProofs Array of ZK proofs
-     * @param _metadataURIs Array of metadata URIs
-     * @return recordIds Array of generated record IDs
-     */
-    function batchPrivateRegister(
-        bytes32[] calldata _contentHashes,
-        bytes32[] calldata _commitments,
-        bytes32[] calldata _nullifierHashes,
-        bytes[] calldata _zkProofs,
-        string[] calldata _metadataURIs
-    ) external payable returns (bytes32[] memory recordIds);
-
     // ═══════════════════════════════════════════════════════════════════════════
     //                      OWNERSHIP VERIFICATION
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
      * @notice Verify ownership of private content using ZK proof
-     * @dev Allows anyone to verify that a claimant owns content without 
+     * @dev The proof is bound to msg.sender and the ownership-verification purpose,
+     *      so a published registration proof cannot be replayed for this operation.
      *      revealing their actual wallet address
      *
      *      The proof demonstrates:
@@ -102,23 +86,10 @@ interface IAxiomPrivacy {
      * @param _zkProof ZK proof of knowledge of commitment preimage
      * @return isOwner Whether proof is valid (claimant is owner)
      */
-    function verifyOwnership(
-        bytes32 _recordId,
-        bytes32 _commitment,
-        bytes calldata _zkProof
-    ) external view returns (bool isOwner);
-
-    /**
-     * @notice Generate ownership proof for off-chain verification
-     * @dev Returns data needed for off-chain proof generation
-     *      The actual proof is generated client-side
-     *
-     * @param _recordId Record to generate proof for
-     * @return commitment The stored commitment
-     * @return proofInputs Public inputs needed for proof verification
-     */
-    function getProofInputs(bytes32 _recordId) 
-        external view returns (bytes32 commitment, bytes memory proofInputs);
+    function verifyOwnership(bytes32 _recordId, bytes32 _commitment, bytes calldata _zkProof)
+        external
+        view
+        returns (bool isOwner);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                          GDPR COMPLIANCE
@@ -145,10 +116,7 @@ interface IAxiomPrivacy {
      * @param _ownershipProof ZK proof proving caller owns the content
      * @return requestId Unique ID for tracking the erasure request
      */
-    function requestErasure(
-        bytes32 _recordId,
-        bytes calldata _ownershipProof
-    ) external returns (bytes32 requestId);
+    function requestErasure(bytes32 _recordId, bytes calldata _ownershipProof) external returns (bytes32 requestId);
 
     /**
      * @notice Confirm erasure completion (called by GDPR Oracle)
@@ -164,31 +132,14 @@ interface IAxiomPrivacy {
      * @param _requestId Erasure request ID
      * @param _proofOfCompliance Hash of off-chain compliance evidence
      */
-    function confirmErasure(
-        bytes32 _requestId,
-        bytes32 _proofOfCompliance
-    ) external;
-
-    /**
-     * @notice Submit GDPR access request (Article 15)
-     * @dev Returns all data associated with a commitment
-     *
-     * @param _commitment User's identity commitment
-     * @param _ownershipProof ZK proof of commitment ownership
-     * @return recordIds All record IDs associated with this commitment
-     */
-    function requestAccess(
-        bytes32 _commitment,
-        bytes calldata _ownershipProof
-    ) external view returns (bytes32[] memory recordIds);
+    function confirmErasure(bytes32 _requestId, bytes32 _proofOfCompliance) external;
 
     /**
      * @notice Get status of GDPR request
      * @param _requestId Request ID to query
      * @return request Full GDPRRequest struct
      */
-    function getGDPRRequest(bytes32 _requestId) 
-        external view returns (AxiomTypesV2.GDPRRequest memory request);
+    function getGDPRRequest(bytes32 _requestId) external view returns (AxiomTypesV2.GDPRRequest memory request);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                          PRIVATE RECORD QUERIES
@@ -202,8 +153,7 @@ interface IAxiomPrivacy {
      * @param _recordId Private record ID
      * @return record PrivateRecord struct
      */
-    function getPrivateRecord(bytes32 _recordId) 
-        external view returns (AxiomTypesV2.PrivateRecord memory record);
+    function getPrivateRecord(bytes32 _recordId) external view returns (AxiomTypesV2.PrivateRecord memory record);
 
     /**
      * @notice Check if content hash exists (regardless of ownership)
@@ -231,6 +181,8 @@ interface IAxiomPrivacy {
      */
     function isMetadataDeleted(bytes32 _recordId) external view returns (bool deleted);
 
+    function getRecordsByCommitment(bytes32 _commitment) external view returns (bytes32[] memory recordIds);
+
     // ═══════════════════════════════════════════════════════════════════════════
     //                          ZK VERIFIER MANAGEMENT
     // ═══════════════════════════════════════════════════════════════════════════
@@ -251,33 +203,9 @@ interface IAxiomPrivacy {
      */
     function setZKVerifier(address _newVerifier) external;
 
-    /**
-     * @notice Get supported proof systems
-     * @return systems Array of supported proof system identifiers (e.g., "groth16", "plonk")
-     */
-    function getSupportedProofSystems() external view returns (string[] memory systems);
+    function approveZKVerifierForProduction() external;
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //                          COMMITMENT MANAGEMENT
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /**
-     * @notice Link additional commitment to existing identity (key rotation)
-     * @dev Allows users to rotate their secrets while maintaining content ownership
-     *
-     *      Requirements:
-     *      - Must prove ownership of old commitment
-     *      - New commitment must not already exist
-     *
-     * @param _oldCommitment Current commitment
-     * @param _newCommitment New commitment to link
-     * @param _migrationProof ZK proof linking old and new commitments
-     */
-    function rotateCommitment(
-        bytes32 _oldCommitment,
-        bytes32 _newCommitment,
-        bytes calldata _migrationProof
-    ) external;
+    function isZKVerifierProductionApproved() external view returns (bool approved);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                              EVENTS
@@ -291,10 +219,7 @@ interface IAxiomPrivacy {
      * @param timestamp Registration timestamp
      */
     event PrivateContentRegistered(
-        bytes32 indexed recordId,
-        bytes32 indexed commitment,
-        bytes32 nullifierHash,
-        uint40 timestamp
+        bytes32 indexed recordId, bytes32 indexed commitment, bytes32 nullifierHash, uint40 timestamp
     );
 
     /**
@@ -303,11 +228,7 @@ interface IAxiomPrivacy {
      * @param recordId Record to be erased
      * @param requestedAt Request timestamp
      */
-    event GDPRErasureRequested(
-        bytes32 indexed requestId,
-        bytes32 indexed recordId,
-        uint40 requestedAt
-    );
+    event GDPRErasureRequested(bytes32 indexed requestId, bytes32 indexed recordId, uint40 requestedAt);
 
     /**
      * @notice Emitted when GDPR erasure is processed
@@ -317,20 +238,7 @@ interface IAxiomPrivacy {
      * @param proofOfCompliance Hash of compliance evidence
      */
     event GDPRErasureProcessed(
-        bytes32 indexed requestId,
-        bytes32 indexed recordId,
-        uint40 processedAt,
-        bytes32 proofOfCompliance
-    );
-
-    /**
-     * @notice Emitted when commitment is rotated
-     * @param oldCommitment Previous commitment
-     * @param newCommitment New commitment
-     */
-    event CommitmentRotated(
-        bytes32 indexed oldCommitment,
-        bytes32 indexed newCommitment
+        bytes32 indexed requestId, bytes32 indexed recordId, uint40 processedAt, bytes32 proofOfCompliance
     );
 
     /**
@@ -338,8 +246,5 @@ interface IAxiomPrivacy {
      * @param oldVerifier Previous verifier address
      * @param newVerifier New verifier address
      */
-    event ZKVerifierUpdated(
-        address indexed oldVerifier,
-        address indexed newVerifier
-    );
+    event ZKVerifierUpdated(address indexed oldVerifier, address indexed newVerifier);
 }

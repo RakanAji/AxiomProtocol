@@ -26,7 +26,12 @@ contract MockVerifier is IZKVerifier {
         uint256[2][2] calldata, /* _pB */
         uint256[2] calldata, /* _pC */
         uint256[] calldata /* _pubSignals */
-    ) external pure override returns (bool) {
+    )
+        external
+        pure
+        override
+        returns (bool)
+    {
         return true;
     }
 }

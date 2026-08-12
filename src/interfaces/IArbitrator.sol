@@ -16,7 +16,7 @@ interface IArbitrator {
     function createDispute(uint256 _choices, bytes calldata _extraData) external payable returns (uint256 disputeID);
 
     /**
-     * @notice Compute the cost of arbitration. It is recommended not to increase it often, 
+     * @notice Compute the cost of arbitration. It is recommended not to increase it often,
      *         as it can be highly time and gas consuming for the arbitrated contracts to cope with fee augmentation.
      * @param _extraData Can be used to give additional info on the dispute to be created.
      * @return cost Amount to be paid.
@@ -31,7 +31,7 @@ interface IArbitrator {
     function appeal(uint256 _disputeID, bytes calldata _extraData) external payable;
 
     /**
-     * @notice Compute the cost of appeal. It is recommended not to increase it often, 
+     * @notice Compute the cost of appeal. It is recommended not to increase it often,
      *         as it can be highly time and gas consuming for the arbitrated contracts to cope with fee augmentation.
      * @param _disputeID ID of the dispute to be appealed.
      * @param _extraData Can be used to give additional info on the appeal.

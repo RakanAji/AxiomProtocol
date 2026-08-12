@@ -17,10 +17,10 @@ contract AxiomAccess is Initializable, AccessControlUpgradeable {
 
     /// @notice Operator role - can verify identities, dispute content
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
-    
+
     /// @notice Enterprise role - gets discounted fees, higher rate limits
     bytes32 public constant ENTERPRISE_ROLE = keccak256("ENTERPRISE_ROLE");
-    
+
     /// @notice Pauser role - can pause/unpause protocol
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
@@ -63,13 +63,13 @@ contract AxiomAccess is Initializable, AccessControlUpgradeable {
      */
     function disputeContent(bytes32 _recordId, string calldata _reason) external onlyRole(OPERATOR_ROLE) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         if (!AxiomStorage.recordExists(_recordId)) {
             revert AxiomTypes.ContentNotFound(_recordId);
         }
-        
+
         s.records[_recordId].status = AxiomTypes.ContentStatus.DISPUTED;
-        
+
         emit ContentDisputed(_recordId, msg.sender, _reason);
         emit AxiomTypes.ContentDisputed(_recordId, msg.sender, _reason);
     }
@@ -98,6 +98,8 @@ contract AxiomAccess is Initializable, AccessControlUpgradeable {
      * @param _maxActions Max actions per window
      */
     function setRateLimit(uint256 _window, uint256 _maxActions) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_window != 0, "AxiomAccess: zero rate-limit window");
+        require(_maxActions != 0, "AxiomAccess: zero max actions");
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         s.rateLimitWindow = _window;
         s.maxActionsPerWindow = _maxActions;
@@ -109,6 +111,7 @@ contract AxiomAccess is Initializable, AccessControlUpgradeable {
      * @param _size New max batch size
      */
     function setMaxBatchSize(uint256 _size) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_size != 0, "AxiomAccess: zero batch size");
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         s.maxBatchSize = _size;
     }

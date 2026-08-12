@@ -6,6 +6,10 @@ import {AxiomTypes} from "../libraries/AxiomTypes.sol";
 import {AxiomStorage} from "../storage/AxiomStorage.sol";
 import {IAxiomIdentity} from "../interfaces/IAxiomIdentity.sol";
 
+interface IIdentityRouterAccessControl {
+    function hasRole(bytes32 role, address account) external view returns (bool);
+}
+
 /**
  * @title AxiomIdentity
  * @author Axiom Protocol Team
@@ -13,13 +17,18 @@ import {IAxiomIdentity} from "../interfaces/IAxiomIdentity.sol";
  * @dev Maps wallet addresses to human-readable identities
  */
 contract AxiomIdentity is Initializable, IAxiomIdentity {
+    bytes32 private constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
+
     // ============ Modifiers ============
 
     /**
      * @dev Ensures caller has operator role (checked via router)
      */
     modifier onlyOperator() {
-        // This will be enforced by AxiomRouter via access control
+        require(
+            IIdentityRouterAccessControl(address(this)).hasRole(OPERATOR_ROLE, msg.sender),
+            "AxiomIdentity: missing operator role"
+        );
         _;
     }
 
@@ -48,65 +57,68 @@ contract AxiomIdentity is Initializable, IAxiomIdentity {
     /**
      * @inheritdoc IAxiomIdentity
      */
-    function registerIdentity(
-        string calldata _name,
-        string calldata _proofURI
-    ) external override notBanned {
+    function registerIdentity(string calldata _name, string calldata _proofURI)
+        external
+        override
+        notBanned
+        whenNotPaused
+    {
+        require(bytes(_name).length != 0, "AxiomIdentity: empty name");
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         // Check if identity already exists
         if (bytes(s.identities[msg.sender].name).length > 0) {
             revert AxiomTypes.IdentityAlreadyExists(msg.sender);
         }
-        
+
         // Check if name is already taken
         bytes32 nameHash = keccak256(abi.encodePacked(_name));
         require(s.nameToAddress[nameHash] == address(0), "Name already taken");
-        
+
         // Store identity
         s.identities[msg.sender] = AxiomTypes.IdentityInfo({
-            name: _name,
-            proofURI: _proofURI,
-            isVerified: false,
-            registeredAt: uint40(block.timestamp)
+            name: _name, proofURI: _proofURI, isVerified: false, registeredAt: uint40(block.timestamp)
         });
-        
+
         // Store reverse lookup
         s.nameToAddress[nameHash] = msg.sender;
-        
+
         emit AxiomTypes.IdentityRegistered(msg.sender, _name, _proofURI);
     }
 
     /**
      * @inheritdoc IAxiomIdentity
      */
-    function updateIdentity(
-        string calldata _name,
-        string calldata _proofURI
-    ) external override notBanned {
+    function updateIdentity(string calldata _name, string calldata _proofURI)
+        external
+        override
+        notBanned
+        whenNotPaused
+    {
+        require(bytes(_name).length != 0, "AxiomIdentity: empty name");
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         // Check identity exists
         if (bytes(s.identities[msg.sender].name).length == 0) {
             revert AxiomTypes.IdentityNotFound(msg.sender);
         }
-        
+
         // Clear old name mapping
         bytes32 oldNameHash = keccak256(abi.encodePacked(s.identities[msg.sender].name));
         delete s.nameToAddress[oldNameHash];
-        
+
         // Check if new name is available
         bytes32 newNameHash = keccak256(abi.encodePacked(_name));
         require(s.nameToAddress[newNameHash] == address(0), "Name already taken");
-        
+
         // Update identity
         s.identities[msg.sender].name = _name;
         s.identities[msg.sender].proofURI = _proofURI;
-        // Keep verification status - admin must re-verify if needed
-        
+        s.identities[msg.sender].isVerified = false;
+
         // Update reverse lookup
         s.nameToAddress[newNameHash] = msg.sender;
-        
+
         emit AxiomTypes.IdentityRegistered(msg.sender, _name, _proofURI);
     }
 
@@ -115,14 +127,14 @@ contract AxiomIdentity is Initializable, IAxiomIdentity {
      */
     function verifyIdentity(address _user) external override onlyOperator {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         // Check identity exists
         if (bytes(s.identities[_user].name).length == 0) {
             revert AxiomTypes.IdentityNotFound(_user);
         }
-        
+
         s.identities[_user].isVerified = true;
-        
+
         emit AxiomTypes.IdentityVerified(_user, msg.sender);
     }
 
@@ -131,12 +143,12 @@ contract AxiomIdentity is Initializable, IAxiomIdentity {
      */
     function revokeVerification(address _user) external override onlyOperator {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         // Check identity exists
         if (bytes(s.identities[_user].name).length == 0) {
             revert AxiomTypes.IdentityNotFound(_user);
         }
-        
+
         s.identities[_user].isVerified = false;
     }
 
@@ -145,9 +157,7 @@ contract AxiomIdentity is Initializable, IAxiomIdentity {
     /**
      * @inheritdoc IAxiomIdentity
      */
-    function resolveIdentity(address _user) 
-        external view override returns (AxiomTypes.IdentityInfo memory info) 
-    {
+    function resolveIdentity(address _user) external view override returns (AxiomTypes.IdentityInfo memory info) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         return s.identities[_user];
     }

@@ -1,161 +1,133 @@
-# 🛡️ AXIOM Protocol
+# Axiom Protocol
 
-## The Future of Digital Authenticity
+Axiom is an experimental Solidity protocol for registering content provenance, managing identities and DIDs, issuing programmable licenses, resolving disputes, and testing privacy-preserving registration flows.
 
-**Decentralized. Verifiable. Immutable.**
+This repository is under active development. It has a substantial Foundry test suite, but it has not been presented here as externally audited or mainnet-ready. In particular, the checked-in Groth16 verifier contains a placeholder verification key and reports `PRODUCTION_READY = false`; privacy tests use a mock verifier.
 
-![Foundry](https://img.shields.io/badge/Built%20with-Foundry-FFDB1C?logo=ethereum)
-![License](https://img.shields.io/badge/License-MIT-blue)
-![Tests](https://img.shields.io/badge/Tests-Passing-brightgreen)
+## Architecture
 
-> _"In an era where AI can generate infinite realities, AXIOM provides the cryptographic anchor to truth."_
+Axiom uses a hybrid upgrade architecture:
 
----
-
-## 🌟 Overview
-
-**AXIOM Protocol** is a next-generation content authentication layer built for the AI age. It empowers creators, journalists, and organizations to cryptographically sign their digital content, creating an unforgeable chain of custody.
-
-By leveraging **Zero-Knowledge Proofs (ZK)**, **Decentralized Identifiers (DIDs)**, and **Smart Licensing**, AXIOM solves the "Oracle Problem" for digital media—proving not just _when_ something was published, but _who_ published it and _how_ it can be used.
-
-### Why AXIOM?
-
-- **🤖 Combat Deepfakes**: Instantly verify if a video or image is authentic or AI-manipulated.
-- **🎨 Protect Intellectual Property**: Automate monetization with programmable, on-chain licenses.
-- **⚖️ Trustless Dispute Resolution**: A decentralized court system to settle ownership claims.
-- **🔒 Privacy-First**: Prove ownership without revealing your identity or the content itself.
-
----
-
-## 🏗️ Architecture: The Diamond Pattern
-
-AXIOM is built on the robust **Diamond Pattern (EIP-2535)**, enabling a modular, upgradeable, and limitless smart contract system.
-
-```mermaid
-graph TD
-    User([User / DApp]) -->|Calls Main Address| Proxy[AxiomRouter <br/> Diamond Proxy]
-
-    subgraph "The Diamond"
-        Proxy -.->|DelegateCall| Facet1[AxiomRegistry <br/> Content Standard]
-        Proxy -.->|DelegateCall| Facet2[AxiomDIDRegistry <br/> Identity Layer]
-        Proxy -.->|DelegateCall| Facet3[AxiomLicenseFacet <br/> Programmable IP]
-        Proxy -.->|DelegateCall| Facet4[AxiomDisputeFacet <br/> Arbitration]
-        Proxy -.->|DelegateCall| Facet5[AxiomPrivacyFacet <br/> ZK-Proofs]
-    end
-
-    Proxy ===|Read/Write| Storage[(AxiomStorage <br/> AppState)]
+```text
+ERC1967Proxy
+    -> AxiomRouter implementation (UUPS upgrade, roles, native pause/ERC-165)
+        -> fallback selector routing
+            -> Registry / Treasury / Identity / Access / DID
+            -> License / Dispute / Privacy facets
+        -> shared AxiomStorage under delegatecall
 ```
 
----
+The facet dispatch resembles a Diamond, but it is not a complete EIP-2535 implementation: upgrades to the router use UUPS, while facet selectors are managed by custom admin functions rather than the standard `diamondCut` and loupe interfaces.
 
-## ⚡ Ecosystem & Features
+`script/AxiomSelectorManifest.sol` is the production selector source of truth used by deployment and tests. Router-native `supportsInterface(bytes4)`, `pause()`, and `unpause()` selectors are deliberately not facet-routed. Roadmap-only functions that still return placeholders or always revert are also excluded.
 
-AXIOM is more than just a registry; it's a complete ecosystem for digital trust.
+The legacy operator-only `disputeContent` shortcut remains in its implementation for compatibility but is not routed by fresh deployments. Production dispute state must move through the stake-backed Dispute facet lifecycle so it can be resolved and cleared consistently.
 
-### 🆔 Decentralized Identity (DID)
+The legacy DID `nonce(address)` getter is likewise not routed: it has no consuming meta-transaction flow and must not be advertised as replay protection.
 
-**"Your Reputation, Owned by You."**
+## Current module status
 
-- **W3C Compliant**: Implements the official DID standard for interoperability.
-- **Verification Levels**: graduated trust tiers (Email -> Social -> Government ID).
-- **Sybil Resistance**: Bonded identities prevent spam and malicious actors.
-- **Use Case**: A news organization can prove they published a breaking story, preventing imposters.
+| Module | Current scope | Readiness notes |
+| --- | --- | --- |
+| Registry, Treasury, Identity, Access | Core registration, fee, identity, moderation, and configuration flows | Locally tested; no external audit claim |
+| DID Registry | DID-inspired registration, delegates, verification levels, and attributes | Local implementation; standards interoperability is not certified |
+| License | License templates, purchase/mint, transfers, ownership queries, direct payment splitting, and territory metadata | Deferred royalty claims and sublicensing are not in the routed production API |
+| Dispute | Configurable staking, response/evidence, arbitration, timeout resolution, settlement, appeals, and stake claims | External arbitrator and token configurations require deployment-specific integration testing |
+| Privacy | Commitments, nullifiers, ownership checks, and erasure workflow | Local/mock testing only until a real circuit, trusted setup, production verification key, and proof-generation client exist |
 
-### 📜 Smart Licensing
+## Prerequisites
 
-**"IP that Pays You Back."**
+- Foundry. CI pins Foundry `v1.7.1`.
+- Git with submodule support.
+- An RPC endpoint and a Foundry keystore account only when deploying.
 
-- **Programmable Rights**: embedded logic for _Commercial_, _Non-Commercial_, or _Exclusive_ use.
-- **Instant Monetization**: Purchase licenses directly on-chain with automatic royalty splits.
-- **NFT Representation**: Licenses are minted as NFTs transparency and transferability.
-- **Use Case**: An artist releases a song; influencers can instantly buy a "Remix License" to use it in their content.
-
-### ⚖️ The dispute Protocol
-
-**"Truth via Game Theory."**
-
-- **Stake-to-Challenge**: Anyone can challenge a content claim by staking tokens.
-- **Decentralized Arbitration**: Disputes are resolved by random, incentivized jurors.
-- **Slash & Burn**: Malicious actors lose their stake; honest claimers are rewarded.
-- **Use Case**: Use verified stock footage that was actually stolen? The original creator challenges the claim and wins the bounty.
-
-### 🔒 Zero-Knowledge Privacy
-
-**"Prove Without Revealing."**
-
-- **Confidential Registration**: Register content fingerprints (hashes) without exposing the file.
-- **Selective Disclosure**: Reveal ownership only to specific parties (e.g., a buyer).
-- **GDPR Compliance**: "Right to be Forgotten" is baked into the protocol logic.
-- **Use Case**: A whistleblower registers sensitive documents to prove existence, revealing them only when safety is guaranteed.
-
----
-
-## 💻 The "Glass Citadel" Interface
-
-The AXIOM frontend is a marvel of modern engineering, designed for security and speed.
-
-- **Stack**: Next.js 14, Wagmi, RainbowKit.
-- **Client-Side Computing**: ALL files are hashed locally in your browser using **Web Workers**. Your data _never_ leaves your device.
-- **Drag-and-Drop Verification**: Drop any file to instantly check its history, creator, and license status.
-- **Visual Trust**: A "Traffic Light" system (🟢 Verified, 🟡 Unverified, 🔴 Disputed) simplifies complex crypto states.
-
----
-
-## � Quick Start
-
-### Prerequisites
-
-- [Foundry](https://book.getfoundry.sh/)
-- [Node.js](https://nodejs.org/) (for frontend)
-
-### Installation
+## Quick start
 
 ```bash
-# Clone the repository
-git clone https://github.com/axiom-protocol/axiom-core.git
-cd axiom-core
+git clone --recurse-submodules https://github.com/RakanAji/AxiomProtocol.git
+cd AxiomProtocol
 
-# Install dependencies
-forge install
-
-# Build contracts
+forge fmt --check
 forge build
-
-# Run test suite
 forge test
 ```
 
----
+If the repository was cloned without submodules:
 
-## 🗺️ Roadmap
+```bash
+git submodule update --init --recursive
+```
 
-- [x] **Phase 1: Core Foundation** (Registry, Router, Access Control)
-- [x] **Phase 2: Business Logic** (Licensing Facet, Dispute Facet)
-- [x] **Phase 3: Identity** (DID Registry, Verification)
-- [ ] **Phase 4: Privacy** (ZK-Circuit implementation & Privacy Facet)
-- [ ] **Phase 5: Glass Citadel Beta** (Public Testnet Launch)
-- [ ] **Phase 6: Mainnet** (Token Generation Event)
+Useful focused commands:
 
----
+```bash
+forge test --match-contract AxiomRouterTest
+forge test --match-contract AxiomFacetTest
+forge test --match-contract IntegrationTest
+forge test --match-contract AxiomSelectorManifestTest
+forge test --match-contract AxiomInvariant
+forge coverage --ir-minimum --exclude-tests --report summary
+```
 
-## 🤝 Contributing
+## Deployment
 
-We are building the trust layer of the internet. If you want to help:
+`DeployPhase4` performs a fresh deployment of the ERC-1967 proxy and all eight facets, installs the canonical selector manifest, applies dispute configuration, and checks the resulting routes before the broadcast ends.
 
-1. Fork the repo.
-2. Create a branch (`feat/quantum-resistance`).
-3. Submit a PR.
+Simulate first, then add `--broadcast` only after reviewing the trace and environment:
 
-**Bounties**: ongoing bug bounties for logic errors and economic exploits.
+```bash
+forge script script/DeployPhase4.s.sol:DeployPhase4 \
+  --rpc-url "$RPC_URL" \
+  --account <foundry-keystore-account>
 
----
+forge script script/DeployPhase4.s.sol:DeployPhase4 \
+  --rpc-url "$RPC_URL" \
+  --account <foundry-keystore-account> \
+  --broadcast --verify
+```
 
-## 📄 License
+The broadcasting signer is the initial protocol admin. Review the treasury, staking token, stake amounts, fee basis points, timing, arbitrators, and verifier for the target network before broadcasting. Do not use the placeholder verifier for a public deployment.
 
-AXIOM Protocol is open-source software licensed under the **MIT License**.
+Optional deployment environment variables:
 
----
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TREASURY_ADDRESS` | broadcasting signer | Non-zero protocol and license treasury fallback |
+| `ADMIN_ADDRESS` | broadcasting signer | Optional explicit initial admin; when set, it must equal the selected broadcast signer |
+| `AXIOM_MIN_STAKE` / `AXIOM_MIN_APPEAL_STAKE` | `0.01 ether` / `0.02 ether` | Dispute and appeal stake floors |
+| `AXIOM_STAKE_TOKEN` | zero address | Zero selects native ETH; non-zero must be a deployed token contract |
+| `AXIOM_PROTOCOL_FEE_BPS` | `500` | Resolution fee in basis points |
+| `AXIOM_RESPONSE_PERIOD` / `AXIOM_EVIDENCE_PERIOD` / `AXIOM_APPEAL_PERIOD` | `3 days` each | Periods in seconds |
+| `AXIOM_ARBITRATOR` | unset | Optional deployed arbitrator to approve |
+| `AXIOM_ZK_VERIFIER` | unset | Optional deployed verifier; privacy calls remain unavailable when unset |
+| `AXIOM_APPROVE_ZK_VERIFIER` | `false` | Calls the production-readiness check; succeeds only for a verifier advertising the required schema and production-ready key |
 
-<p align="center">
-  <i>"Veritas in Codice" — Truth in Code</i>
-</p>
+The script reads numeric durations as seconds. Values are validated by the production configuration APIs, and all configured values are read back before the broadcast completes. The reserved `rewardBps` and `slashBps` fields are fixed to zero until the protocol has a fully funded counter-bond/reward model.
+
+Existing broadcast artifacts are historical evidence, not a current release declaration. The registry's new append-only record enumeration cannot reconstruct record IDs created by an older implementation, so a fresh deployment is required when complete enumeration of all records is expected.
+
+`DeployPhase3` is retained only as an explicitly acknowledged migration tool for an otherwise empty legacy router. It requires `AXIOM_ACK_UNSAFE_LEGACY_MIGRATION=true` and does not reconstruct old record indexes, license state, active disputes, or native-stake escrow accounting. A populated deployment needs a separately designed and audited state migration; the acknowledgement flag does not make that upgrade safe.
+
+## ABI and CI
+
+CI runs formatting, size-aware build, the full test suite, coverage, and canonical ABI generation. The ABI artifact is generated from `AxiomFacets`:
+
+```bash
+forge inspect AxiomFacets abi --json > axiom-router-abi.json
+```
+
+Frontend integrations should consume that generated ABI after contract CI passes instead of maintaining a hand-edited selector list.
+
+## Security and release checklist
+
+Before a public testnet or mainnet release:
+
+1. Generate and independently verify the real circuit and Groth16 verification key.
+2. Exercise deployment plus post-deploy assertions on a fresh network deployment.
+3. Validate external arbitrator and ERC-20 stake integrations end to end.
+4. Complete an independent security review and resolve its findings.
+5. Publish reproducible addresses, compiler settings, ABI, and verification artifacts for the exact release commit.
+
+## License
+
+MIT. See `LICENSE`.

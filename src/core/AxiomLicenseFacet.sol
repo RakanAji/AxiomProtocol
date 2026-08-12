@@ -6,10 +6,16 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {IERC2981} from "@openzeppelin/contracts/interfaces/IERC2981.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 
 import {AxiomStorage} from "../storage/AxiomStorage.sol";
+import {AxiomTypes} from "../libraries/AxiomTypes.sol";
 import {AxiomTypesV2} from "../libraries/AxiomTypesV2.sol";
 import {IAxiomLicense} from "../interfaces/IAxiomLicense.sol";
+
+interface ILicenseRouterAccessControl {
+    function hasRole(bytes32 role, address account) external view returns (bool);
+}
 
 /**
  * @title AxiomLicenseFacet
@@ -18,11 +24,11 @@ import {IAxiomLicense} from "../interfaces/IAxiomLicense.sol";
  * @dev Stateless facet executed via delegatecall from AxiomRouter.
  *      Implements ERC-721 and ERC-2981 manually without inheritance (Diamond Pattern requirement).
  *      The AxiomRouter (Diamond Proxy) address IS the NFT collection address.
- *      
+ *
  *      Payment Methods:
  *      - Native ETH (paymentToken = address(0))
  *      - Any ERC-20 token
- *      
+ *
  *      CRITICAL: All state stored in AxiomStorage. No state variables in this contract.
  */
 contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
@@ -35,16 +41,17 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
 
     /// @notice Basis points denominator (100%)
     uint16 public constant BPS_DENOMINATOR = 10000;
-    
+
     /// @notice Protocol fee in basis points (5%)
     uint16 public constant PROTOCOL_FEE_BPS = 500;
+    bytes32 private constant DEFAULT_ADMIN_ROLE = 0x00;
 
     // ERC-721 Interface ID
     bytes4 private constant INTERFACE_ID_ERC721 = 0x80ac58cd;
-    
+
     // ERC-721 Metadata Interface ID
     bytes4 private constant INTERFACE_ID_ERC721_METADATA = 0x5b5e139f;
-    
+
     // ERC-2981 Interface ID
     bytes4 private constant INTERFACE_ID_ERC2981 = 0x2a55205a;
 
@@ -72,9 +79,44 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         _;
     }
 
+    modifier whenNotPaused() {
+        require(!AxiomStorage.getStorage().paused, "Protocol is paused");
+        _;
+    }
+
+    modifier onlyAdmin() {
+        require(
+            ILicenseRouterAccessControl(address(this)).hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
+            "LicenseFacet: missing admin role"
+        );
+        _;
+    }
+
+    modifier notBanned() {
+        if (AxiomStorage.getStorage().bannedAddresses[msg.sender]) {
+            revert AxiomTypesV2.OperationNotPermitted();
+        }
+        _;
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     //                          LICENSE TEMPLATE MANAGEMENT
     // ═══════════════════════════════════════════════════════════════════════════
+
+    function setLicenseTreasury(address _treasury) external override onlyAdmin {
+        if (_treasury == address(0)) {
+            revert AxiomTypesV2.ZeroAddress();
+        }
+        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
+        address oldTreasury = s.licenseTreasury;
+        s.licenseTreasury = _treasury;
+        emit LicenseTreasuryUpdated(oldTreasury, _treasury);
+    }
+
+    function getLicenseTreasury() external view override returns (address) {
+        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
+        return s.licenseTreasury != address(0) ? s.licenseTreasury : s.treasuryWallet;
+    }
 
     /**
      * @notice Creates a new license template for registered content.
@@ -100,16 +142,33 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         bool _exclusive,
         bool _sublicensable,
         string calldata _customTermsURI
-    ) external override returns (uint256 licenseId) {
+    ) external override whenNotPaused notBanned returns (uint256 licenseId) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
+        address issuer = _getActiveRecordIssuer(s, _recordId);
+        if (issuer != msg.sender) {
+            revert AxiomTypesV2.NotLicensor(msg.sender, issuer);
+        }
+
+        if (_licenseType == AxiomTypesV2.LicenseType.NONE) {
+            revert AxiomTypesV2.OperationNotPermitted();
+        }
+
         // Validate royalty
         if (_royaltyBps > BPS_DENOMINATOR) {
             revert AxiomTypesV2.InvalidRoyaltySplit(_royaltyBps);
         }
-        
+
         // Custom type requires terms URI
         if (_licenseType == AxiomTypesV2.LicenseType.CUSTOM && bytes(_customTermsURI).length == 0) {
+            revert AxiomTypesV2.OperationNotPermitted();
+        }
+
+        if (_validUntil != 0 && _validUntil <= block.timestamp) {
+            revert AxiomTypesV2.LicenseExpired(0, _validUntil);
+        }
+
+        if (_paymentToken != address(0) && _paymentToken.code.length == 0) {
             revert AxiomTypesV2.OperationNotPermitted();
         }
 
@@ -151,23 +210,26 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _validUntil The new expiration timestamp.
      * @param _exclusive The new exclusivity setting.
      */
-    function updateLicense(
-        uint256 _licenseId,
-        uint256 _price,
-        uint40 _validUntil,
-        bool _exclusive
-    ) external override {
+    function updateLicense(uint256 _licenseId, uint256 _price, uint40 _validUntil, bool _exclusive)
+        external
+        override
+        whenNotPaused
+    {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         AxiomTypesV2.License storage license = s.licenses[_licenseId];
-        
+
         if (license.licensor != msg.sender) {
             revert AxiomTypesV2.NotLicensor(msg.sender, license.licensor);
         }
-        
-        // Can only update if no purchases yet
-        if (license.exclusive && license.licensee != address(0)) {
+
+        // Commercial terms are immutable after the first purchase.
+        if (s.licensePurchaseCount[_licenseId] != 0) {
             revert AxiomTypesV2.OperationNotPermitted();
+        }
+
+        if (_validUntil != 0 && _validUntil <= block.timestamp) {
+            revert AxiomTypesV2.LicenseExpired(_licenseId, _validUntil);
         }
 
         license.price = _price;
@@ -180,11 +242,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @dev Existing purchases remain valid until their expiration.
      * @param _licenseId The License ID to deactivate.
      */
-    function deactivateLicense(uint256 _licenseId) external override {
+    function deactivateLicense(uint256 _licenseId) external override whenNotPaused {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         AxiomTypesV2.License storage license = s.licenses[_licenseId];
-        
+
         if (license.licensor != msg.sender) {
             revert AxiomTypesV2.NotLicensor(msg.sender, license.licensor);
         }
@@ -205,10 +267,15 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _duration The requested license duration in seconds.
      * @return tokenId The minted NFT token ID representing the license.
      */
-    function purchaseLicense(
-        uint256 _licenseId,
-        uint40 _duration
-    ) external payable override nonReentrant returns (uint256 tokenId) {
+    function purchaseLicense(uint256 _licenseId, uint40 _duration)
+        external
+        payable
+        override
+        nonReentrant
+        whenNotPaused
+        notBanned
+        returns (uint256 tokenId)
+    {
         return _purchaseLicense(_licenseId, msg.sender, _duration);
     }
 
@@ -220,11 +287,15 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _duration The requested license duration.
      * @return tokenId The minted NFT token ID.
      */
-    function purchaseLicenseFor(
-        uint256 _licenseId,
-        address _recipient,
-        uint40 _duration
-    ) external payable override nonReentrant returns (uint256 tokenId) {
+    function purchaseLicenseFor(uint256 _licenseId, address _recipient, uint40 _duration)
+        external
+        payable
+        override
+        nonReentrant
+        whenNotPaused
+        notBanned
+        returns (uint256 tokenId)
+    {
         if (_recipient == address(0)) {
             revert AxiomTypesV2.ZeroAddress();
         }
@@ -238,25 +309,28 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      *      This prevents ERC-777 tokensToSend reentrancy from bypassing the
      *      exclusive license check and minting duplicate NFTs.
      */
-    function _purchaseLicense(
-        uint256 _licenseId,
-        address _recipient,
-        uint40 _duration
-    ) internal returns (uint256 tokenId) {
+    function _purchaseLicense(uint256 _licenseId, address _recipient, uint40 _duration)
+        internal
+        returns (uint256 tokenId)
+    {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         AxiomTypesV2.License storage license = s.licenses[_licenseId];
-        
+
         // CHECKS
         if (!license.active) {
             revert AxiomTypesV2.LicenseNotFound(_licenseId);
         }
-        
+
+        if (_getActiveRecordIssuer(s, license.recordId) != license.licensor) {
+            revert AxiomTypesV2.OperationNotPermitted();
+        }
+
         if (license.exclusive && license.licensee != address(0)) {
             revert AxiomTypesV2.LicenseAlreadyPurchased(_licenseId);
         }
-        
-        if (license.validUntil > 0 && license.validUntil < block.timestamp) {
+
+        if (license.validUntil > 0 && license.validUntil <= block.timestamp) {
             revert AxiomTypesV2.LicenseExpired(_licenseId, license.validUntil);
         }
 
@@ -273,8 +347,20 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         _mint(_recipient, tokenId);
 
         // Record purchase data
-        uint40 expiresAt = _duration > 0 ? uint40(block.timestamp) + _duration : license.validUntil;
-        
+        uint40 expiresAt;
+        if (_duration > 0) {
+            uint256 requestedExpiry = block.timestamp + uint256(_duration);
+            if (requestedExpiry > type(uint40).max) {
+                revert AxiomTypesV2.OperationNotPermitted();
+            }
+            if (license.validUntil != 0 && requestedExpiry > license.validUntil) {
+                revert AxiomTypesV2.LicenseExpired(_licenseId, license.validUntil);
+            }
+            expiresAt = uint40(requestedExpiry);
+        } else {
+            expiresAt = license.validUntil;
+        }
+
         s.tokenLicenseData[tokenId] = AxiomTypesV2.LicensePurchase({
             licenseId: _licenseId,
             tokenId: tokenId,
@@ -283,6 +369,7 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
             purchasedAt: uint40(block.timestamp),
             expiresAt: expiresAt
         });
+        s.licensePurchaseCount[_licenseId]++;
 
         // Mark exclusive license BEFORE payment interaction
         // This is the critical fix: if an ERC-777 hook re-enters purchaseLicense,
@@ -303,15 +390,15 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      *      For ERC-20: safeTransferFrom is the external call (interaction).
      *      For ETH: .call is the external call (interaction).
      */
-    function _processPayment(
-        address _token,
-        uint256 _amount,
-        address _licensor,
-        bytes32 _recordId
-    ) internal {
+    function _processPayment(address _token, uint256 _amount, address _licensor, bytes32 _recordId) internal {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
-        if (_amount == 0) return;
+
+        if (_amount == 0) {
+            if (msg.value != 0) {
+                revert AxiomTypesV2.OperationNotPermitted();
+            }
+            return;
+        }
 
         // Calculate splits
         uint256 protocolFee = (_amount * PROTOCOL_FEE_BPS) / BPS_DENOMINATOR;
@@ -325,9 +412,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
 
             // INTERACTIONS: All external calls grouped together
             // Send to treasury
-            address treasury = s.licenseTreasury != address(0) ? s.licenseTreasury : s.treasuryWallet;
-            (bool success1,) = payable(treasury).call{value: protocolFee}("");
-            require(success1, "LicenseFacet: Treasury transfer failed");
+            address treasury = _licenseTreasury(s);
+            if (protocolFee != 0) {
+                (bool success1,) = payable(treasury).call{value: protocolFee}("");
+                require(success1, "LicenseFacet: Treasury transfer failed");
+            }
 
             // Check if there's a royalty split
             AxiomTypesV2.RoyaltySplit storage split = s.royaltySplits[_recordId];
@@ -346,14 +435,23 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
             }
         } else {
             // ERC-20 payment
+            if (msg.value != 0) {
+                revert AxiomTypesV2.OperationNotPermitted();
+            }
             IERC20 token = IERC20(_token);
-            
+
             // Pull tokens from buyer
+            uint256 balanceBefore = token.balanceOf(address(this));
             token.safeTransferFrom(msg.sender, address(this), _amount);
-            
+            if (token.balanceOf(address(this)) - balanceBefore != _amount) {
+                revert AxiomTypesV2.OperationNotPermitted();
+            }
+
             // Distribute: protocol fee
-            address treasury = s.licenseTreasury != address(0) ? s.licenseTreasury : s.treasuryWallet;
-            token.safeTransfer(treasury, protocolFee);
+            address treasury = _licenseTreasury(s);
+            if (protocolFee != 0) {
+                token.safeTransfer(treasury, protocolFee);
+            }
 
             // Distribute: licensor / royalty split
             AxiomTypesV2.RoyaltySplit storage split = s.royaltySplits[_recordId];
@@ -365,12 +463,13 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         }
     }
 
-    function _distributeRoyaltiesETH(
-        uint256 _amount,
-        AxiomTypesV2.RoyaltySplit storage _split
-    ) internal {
+    function _distributeRoyaltiesETH(uint256 _amount, AxiomTypesV2.RoyaltySplit storage _split) internal {
+        uint256 distributed;
         for (uint256 i = 0; i < _split.recipients.length; i++) {
-            uint256 share = (_amount * _split.shares[i]) / BPS_DENOMINATOR;
+            uint256 share = i + 1 == _split.recipients.length
+                ? _amount - distributed
+                : (_amount * _split.shares[i]) / BPS_DENOMINATOR;
+            distributed += share;
             if (share > 0) {
                 (bool success,) = payable(_split.recipients[i]).call{value: share}("");
                 require(success, "Royalty transfer failed");
@@ -378,13 +477,15 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         }
     }
 
-    function _distributeRoyaltiesERC20(
-        IERC20 _token,
-        uint256 _amount,
-        AxiomTypesV2.RoyaltySplit storage _split
-    ) internal {
+    function _distributeRoyaltiesERC20(IERC20 _token, uint256 _amount, AxiomTypesV2.RoyaltySplit storage _split)
+        internal
+    {
+        uint256 distributed;
         for (uint256 i = 0; i < _split.recipients.length; i++) {
-            uint256 share = (_amount * _split.shares[i]) / BPS_DENOMINATOR;
+            uint256 share = i + 1 == _split.recipients.length
+                ? _amount - distributed
+                : (_amount * _split.shares[i]) / BPS_DENOMINATOR;
+            distributed += share;
             if (share > 0) {
                 _token.safeTransfer(_split.recipients[i], share);
             }
@@ -424,11 +525,7 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _to The new owner.
      * @param _tokenId The Token ID to transfer.
      */
-    function transferFrom(
-        address _from,
-        address _to,
-        uint256 _tokenId
-    ) external nonReentrant {
+    function transferFrom(address _from, address _to, uint256 _tokenId) external nonReentrant whenNotPaused {
         _transfer(_from, _to, _tokenId);
     }
 
@@ -440,11 +537,7 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _to The new owner.
      * @param _tokenId The Token ID to transfer.
      */
-    function safeTransferFrom(
-        address _from,
-        address _to,
-        uint256 _tokenId
-    ) external nonReentrant {
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId) external nonReentrant whenNotPaused {
         _safeTransfer(_from, _to, _tokenId, "");
     }
 
@@ -456,12 +549,11 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _tokenId The Token ID to transfer.
      * @param _data Additional data with no specified format, sent in call to `onERC721Received`.
      */
-    function safeTransferFrom(
-        address _from,
-        address _to,
-        uint256 _tokenId,
-        bytes memory _data
-    ) public nonReentrant {
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId, bytes memory _data)
+        public
+        nonReentrant
+        whenNotPaused
+    {
         _safeTransfer(_from, _to, _tokenId, _data);
     }
 
@@ -469,12 +561,7 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @dev Internal safe transfer logic — separated from the public function
      *      so that the nonReentrant modifier is only on the external entry points.
      */
-    function _safeTransfer(
-        address _from,
-        address _to,
-        uint256 _tokenId,
-        bytes memory _data
-    ) internal {
+    function _safeTransfer(address _from, address _to, uint256 _tokenId, bytes memory _data) internal {
         _transfer(_from, _to, _tokenId);
         _checkOnERC721Received(_from, _to, _tokenId, _data);
     }
@@ -486,7 +573,7 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _approved The address to be approved for the given token ID.
      * @param _tokenId The Token ID to approve.
      */
-    function approve(address _approved, uint256 _tokenId) external nonReentrant tokenExists(_tokenId) {
+    function approve(address _approved, uint256 _tokenId) external nonReentrant whenNotPaused tokenExists(_tokenId) {
         address owner = ownerOf(_tokenId);
         require(_approved != owner, "ERC721: approval to current owner");
         require(
@@ -496,7 +583,7 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
 
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         s.tokenApprovals[_tokenId] = _approved;
-        
+
         emit Approval(owner, _approved, _tokenId);
     }
 
@@ -506,12 +593,12 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _operator The operator to approve or remove.
      * @param _approved True to approve the operator, false to revoke.
      */
-    function setApprovalForAll(address _operator, bool _approved) external {
+    function setApprovalForAll(address _operator, bool _approved) external whenNotPaused {
         require(_operator != msg.sender, "ERC721: approve to caller");
-        
+
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         s.operatorApprovals[msg.sender][_operator] = _approved;
-        
+
         emit ApprovalForAll(msg.sender, _operator, _approved);
     }
 
@@ -565,12 +652,13 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         AxiomTypesV2.LicensePurchase storage purchase = s.tokenLicenseData[_tokenId];
         AxiomTypesV2.License storage license = s.licenses[purchase.licenseId];
-        
+
         // Simple JSON metadata (in production, return IPFS URI)
-        return string(abi.encodePacked(
-            "data:application/json;base64,",
-            _encodeMetadata(_tokenId, purchase, license)
-        ));
+        return string(
+            abi.encodePacked(
+                "data:application/json;base64,", Base64.encode(bytes(_encodeMetadata(_tokenId, purchase, license)))
+            )
+        );
     }
 
     function _encodeMetadata(
@@ -579,14 +667,22 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         AxiomTypesV2.License storage _license
     ) internal view returns (string memory) {
         // Simplified - in production use Base64 encoding library
-        return string(abi.encodePacked(
-            '{"name":"Axiom License #', _tokenId.toString(), '",',
-            '"description":"License for content record",',
-            '"attributes":[',
-            '{"trait_type":"License Type","value":"', _getLicenseTypeName(_license.licenseType), '"},',
-            '{"trait_type":"Royalty","value":"', uint256(_license.royaltyBps).toString(), '"}',
-            ']}'
-        ));
+        return string(
+            abi.encodePacked(
+                '{"name":"Axiom License #',
+                _tokenId.toString(),
+                '",',
+                '"description":"License for content record",',
+                '"attributes":[',
+                '{"trait_type":"License Type","value":"',
+                _getLicenseTypeName(_license.licenseType),
+                '"},',
+                '{"trait_type":"Royalty","value":"',
+                uint256(_license.royaltyBps).toString(),
+                '"}',
+                "]}"
+            )
+        );
     }
 
     function _getLicenseTypeName(AxiomTypesV2.LicenseType _type) internal pure returns (string memory) {
@@ -594,8 +690,12 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         if (_type == AxiomTypesV2.LicenseType.CC_BY) return "CC-BY";
         if (_type == AxiomTypesV2.LicenseType.CC_BY_SA) return "CC-BY-SA";
         if (_type == AxiomTypesV2.LicenseType.CC_BY_NC) return "CC-BY-NC";
+        if (_type == AxiomTypesV2.LicenseType.CC_BY_NC_SA) return "CC-BY-NC-SA";
+        if (_type == AxiomTypesV2.LicenseType.CC_BY_ND) return "CC-BY-ND";
+        if (_type == AxiomTypesV2.LicenseType.CC_BY_NC_ND) return "CC-BY-NC-ND";
         if (_type == AxiomTypesV2.LicenseType.COMMERCIAL_SINGLE) return "Commercial Single";
         if (_type == AxiomTypesV2.LicenseType.COMMERCIAL_UNLIMITED) return "Commercial Unlimited";
+        if (_type == AxiomTypesV2.LicenseType.EXCLUSIVE) return "Exclusive";
         return "Custom";
     }
 
@@ -605,27 +705,23 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
 
     function _mint(address _to, uint256 _tokenId) internal {
         require(_to != address(0), "ERC721: mint to zero address");
-        
+
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         require(s.tokenOwner[_tokenId] == address(0), "ERC721: token already minted");
 
         s.tokenBalance[_to] += 1;
         s.tokenOwner[_tokenId] = _to;
+        s.ownedLicenseTokenIndex[_tokenId] = s.ownedLicenseTokens[_to].length + 1;
+        s.ownedLicenseTokens[_to].push(_tokenId);
 
         emit Transfer(address(0), _to, _tokenId);
     }
 
-    function _transfer(
-        address _from,
-        address _to,
-        uint256 _tokenId
-    ) internal {
+    function _transfer(address _from, address _to, uint256 _tokenId) internal {
         require(ownerOf(_tokenId) == _from, "ERC721: transfer from incorrect owner");
         require(_to != address(0), "ERC721: transfer to zero address");
         require(
-            msg.sender == _from || 
-            isApprovedForAll(_from, msg.sender) || 
-            getApproved(_tokenId) == msg.sender,
+            msg.sender == _from || isApprovedForAll(_from, msg.sender) || getApproved(_tokenId) == msg.sender,
             "ERC721: caller is not owner nor approved"
         );
 
@@ -635,19 +731,19 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
         delete s.tokenApprovals[_tokenId];
 
         // Update balances
+        _removeOwnedToken(s, _from, _tokenId);
         s.tokenBalance[_from] -= 1;
         s.tokenBalance[_to] += 1;
         s.tokenOwner[_tokenId] = _to;
+        AxiomTypesV2.License storage license = s.licenses[s.tokenLicenseData[_tokenId].licenseId];
+        if (license.exclusive) license.licensee = _to;
+        s.ownedLicenseTokenIndex[_tokenId] = s.ownedLicenseTokens[_to].length + 1;
+        s.ownedLicenseTokens[_to].push(_tokenId);
 
         emit Transfer(_from, _to, _tokenId);
     }
 
-    function _checkOnERC721Received(
-        address _from,
-        address _to,
-        uint256 _tokenId,
-        bytes memory _data
-    ) private {
+    function _checkOnERC721Received(address _from, address _to, uint256 _tokenId, bytes memory _data) private {
         if (_to.code.length > 0) {
             try IERC721Receiver(_to).onERC721Received(msg.sender, _from, _tokenId, _data) returns (bytes4 retval) {
                 require(retval == IERC721Receiver.onERC721Received.selector, "ERC721: transfer to non ERC721Receiver");
@@ -676,14 +772,17 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @return royaltyAmount The amount of royalty to pay.
      */
     function royaltyInfo(uint256 _tokenId, uint256 _salePrice)
-        external view override(IAxiomLicense) tokenExists(_tokenId)
+        external
+        view
+        override(IAxiomLicense)
+        tokenExists(_tokenId)
         returns (address receiver, uint256 royaltyAmount)
     {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         AxiomTypesV2.LicensePurchase storage purchase = s.tokenLicenseData[_tokenId];
         AxiomTypesV2.License storage license = s.licenses[purchase.licenseId];
-        
+
         receiver = license.licensor;
         royaltyAmount = (_salePrice * license.royaltyBps) / BPS_DENOMINATOR;
     }
@@ -699,11 +798,17 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _recipients The array of royalty recipient addresses.
      * @param _shares The array of share amounts in basis points.
      */
-    function setRoyaltySplit(
-        bytes32 _recordId,
-        address[] calldata _recipients,
-        uint16[] calldata _shares
-    ) external override {
+    function setRoyaltySplit(bytes32 _recordId, address[] calldata _recipients, uint16[] calldata _shares)
+        external
+        override
+        whenNotPaused
+    {
+        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
+        address issuer = _getActiveRecordIssuer(s, _recordId);
+        if (issuer != msg.sender) {
+            revert AxiomTypesV2.NotLicensor(msg.sender, issuer);
+        }
+
         if (_recipients.length != _shares.length) {
             revert AxiomTypesV2.ArrayLengthMismatch();
         }
@@ -715,18 +820,13 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
             }
             totalShares += _shares[i];
         }
-        
+
         if (totalShares != BPS_DENOMINATOR) {
             revert AxiomTypesV2.InvalidRoyaltySplit(totalShares);
         }
 
-        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
-        s.royaltySplits[_recordId] = AxiomTypesV2.RoyaltySplit({
-            recipients: _recipients,
-            shares: _shares,
-            autoDistribute: true
-        });
+        s.royaltySplits[_recordId] =
+            AxiomTypesV2.RoyaltySplit({recipients: _recipients, shares: _shares, autoDistribute: true});
 
         emit RoyaltySplitUpdated(_recordId, _recipients, _shares);
     }
@@ -797,10 +897,7 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _licenseId The License template ID.
      * @return license The License struct.
      */
-    function getLicense(uint256 _licenseId) 
-        external view override 
-        returns (AxiomTypesV2.License memory) 
-    {
+    function getLicense(uint256 _licenseId) external view override returns (AxiomTypesV2.License memory) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         return s.licenses[_licenseId];
     }
@@ -810,25 +907,18 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _recordId The ID of the content record.
      * @return licenseIds An array of license IDs.
      */
-    function getLicensesByRecord(bytes32 _recordId) 
-        external view override 
-        returns (uint256[] memory) 
-    {
+    function getLicensesByRecord(bytes32 _recordId) external view override returns (uint256[] memory) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         return s.recordLicenses[_recordId];
     }
 
     /**
-     * @notice Retrieves all licenses owned by an address (Not Implemented).
-     * @dev Reverts with OperationNotPermitted.
-     * @return licenseIds Reverts.
+     * @notice Retrieves the license NFT token IDs currently owned by an address.
+     * @dev The owner index is updated on mint and transfer.
+     * @return tokenIds License NFT token IDs owned by `_owner`.
      */
-    function getLicensesByOwner(address) 
-        external pure override 
-        returns (uint256[] memory) 
-    {
-        // Would require enumeration - not implemented for gas efficiency
-        revert AxiomTypesV2.OperationNotPermitted();
+    function getLicensesByOwner(address _owner) external view override returns (uint256[] memory) {
+        return AxiomStorage.getStorage().ownedLicenseTokens[_owner];
     }
 
     /**
@@ -839,20 +929,24 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @return isValid True if the licensee holds a valid license.
      * @return licenseType The type of license held.
      */
-    function hasValidLicense(address _licensee, bytes32 _recordId) 
-        external view override 
-        returns (bool isValid, AxiomTypesV2.LicenseType licenseType) 
+    function hasValidLicense(address _licensee, bytes32 _recordId)
+        external
+        view
+        override
+        returns (bool isValid, AxiomTypesV2.LicenseType licenseType)
     {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
-        // Check owned tokens (simplified - would need enumeration for full implementation)
-        uint256 balance = s.tokenBalance[_licensee];
-        if (balance == 0) {
-            return (false, AxiomTypesV2.LicenseType.NONE);
+
+        uint256[] storage tokenIds = s.ownedLicenseTokens[_licensee];
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            uint256 tokenId = tokenIds[i];
+            AxiomTypesV2.LicensePurchase storage purchase = s.tokenLicenseData[tokenId];
+            if (s.licenses[purchase.licenseId].recordId != _recordId) continue;
+            if (purchase.expiresAt != 0 && purchase.expiresAt <= block.timestamp) continue;
+
+            return (true, s.licenses[purchase.licenseId].licenseType);
         }
-        
-        // In production, would iterate through owned tokens
-        // For now, return basic check
+
         return (false, AxiomTypesV2.LicenseType.NONE);
     }
 
@@ -863,19 +957,18 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      */
     function isLicenseValid(uint256 _tokenId) external view override returns (bool) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         if (s.tokenOwner[_tokenId] == address(0)) {
             return false;
         }
-        
+
         AxiomTypesV2.LicensePurchase storage purchase = s.tokenLicenseData[_tokenId];
-        
-        if (purchase.expiresAt > 0 && purchase.expiresAt < block.timestamp) {
+
+        if (purchase.expiresAt > 0 && purchase.expiresAt <= block.timestamp) {
             return false;
         }
-        
-        AxiomTypesV2.License storage license = s.licenses[purchase.licenseId];
-        return license.active;
+
+        return purchase.licenseId != 0;
     }
 
     /**
@@ -883,10 +976,7 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _recordId The content record ID.
      * @return split The RoyaltySplit struct.
      */
-    function getRoyaltySplit(bytes32 _recordId) 
-        external view override 
-        returns (AxiomTypesV2.RoyaltySplit memory) 
-    {
+    function getRoyaltySplit(bytes32 _recordId) external view override returns (AxiomTypesV2.RoyaltySplit memory) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         return s.royaltySplits[_recordId];
     }
@@ -897,16 +987,67 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
      * @param _licenseId The License ID to update.
      * @param _restrictionsURI The new restrictions IPFS URI.
      */
-    function setTerritoryRestrictions(uint256 _licenseId, string calldata _restrictionsURI) external override {
+    function setTerritoryRestrictions(uint256 _licenseId, string calldata _restrictionsURI)
+        external
+        override
+        whenNotPaused
+    {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         AxiomTypesV2.License storage license = s.licenses[_licenseId];
-        
+
         if (license.licensor != msg.sender) {
             revert AxiomTypesV2.NotLicensor(msg.sender, license.licensor);
         }
 
+        if (s.licensePurchaseCount[_licenseId] != 0) {
+            revert AxiomTypesV2.OperationNotPermitted();
+        }
+
         license.territoryRestrictions = _restrictionsURI;
+    }
+
+    function _getActiveRecordIssuer(AxiomStorage.Storage storage s, bytes32 _recordId)
+        internal
+        view
+        returns (address issuer)
+    {
+        if (AxiomStorage.recordExistsV2(_recordId)) {
+            AxiomTypesV2.AxiomRecord storage recordV2 = s.recordsV2[_recordId];
+            if (recordV2.status != AxiomTypesV2.ContentStatus.ACTIVE) {
+                revert AxiomTypesV2.InvalidContentStatus(_recordId, recordV2.status);
+            }
+            return recordV2.issuer;
+        }
+        if (AxiomStorage.recordExists(_recordId)) {
+            AxiomTypes.AxiomRecord storage recordV1 = s.records[_recordId];
+            if (recordV1.status != AxiomTypes.ContentStatus.ACTIVE) {
+                revert AxiomTypesV2.OperationNotPermitted();
+            }
+            return recordV1.issuer;
+        }
+        revert AxiomTypesV2.ContentNotFound(_recordId);
+    }
+
+    function _removeOwnedToken(AxiomStorage.Storage storage s, address _owner, uint256 _tokenId) internal {
+        uint256 indexPlusOne = s.ownedLicenseTokenIndex[_tokenId];
+        require(indexPlusOne != 0, "ERC721: owner enumeration missing");
+        uint256 index = indexPlusOne - 1;
+        uint256 lastIndex = s.ownedLicenseTokens[_owner].length - 1;
+        if (index != lastIndex) {
+            uint256 lastTokenId = s.ownedLicenseTokens[_owner][lastIndex];
+            s.ownedLicenseTokens[_owner][index] = lastTokenId;
+            s.ownedLicenseTokenIndex[lastTokenId] = index + 1;
+        }
+        s.ownedLicenseTokens[_owner].pop();
+        delete s.ownedLicenseTokenIndex[_tokenId];
+    }
+
+    function _licenseTreasury(AxiomStorage.Storage storage s) internal view returns (address treasury) {
+        treasury = s.licenseTreasury != address(0) ? s.licenseTreasury : s.treasuryWallet;
+        if (treasury == address(0)) {
+            revert AxiomTypesV2.ZeroAddress();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -914,11 +1055,8 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     // ═══════════════════════════════════════════════════════════════════════════
 
     function supportsInterface(bytes4 interfaceId) public pure override returns (bool) {
-        return
-            interfaceId == INTERFACE_ID_ERC721 ||
-            interfaceId == INTERFACE_ID_ERC721_METADATA ||
-            interfaceId == INTERFACE_ID_ERC2981 ||
-            interfaceId == type(IERC165).interfaceId;
+        return interfaceId == INTERFACE_ID_ERC721 || interfaceId == INTERFACE_ID_ERC721_METADATA
+            || interfaceId == INTERFACE_ID_ERC2981 || interfaceId == type(IERC165).interfaceId;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -928,6 +1066,7 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
     event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+    event LicenseTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
 
     // Required for receiving ETH
     receive() external payable {}
@@ -935,10 +1074,7 @@ contract AxiomLicenseFacet is IAxiomLicense, IERC165 {
 
 // IERC721Receiver interface
 interface IERC721Receiver {
-    function onERC721Received(
-        address operator,
-        address from,
-        uint256 tokenId,
-        bytes calldata data
-    ) external returns (bytes4);
+    function onERC721Received(address operator, address from, uint256 tokenId, bytes calldata data)
+        external
+        returns (bytes4);
 }

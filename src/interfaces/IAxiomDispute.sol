@@ -8,7 +8,7 @@ import {AxiomTypesV2} from "../libraries/AxiomTypesV2.sol";
  * @author Axiom Protocol Team
  * @notice Interface for decentralized content dispute resolution
  * @dev Replaces centralized OPERATOR_ROLE with community-driven arbitration
- *      
+ *
  *      This interface enables:
  *      - Anyone to challenge content with staked tokens
  *      - Content owners to respond with evidence
@@ -28,6 +28,10 @@ import {AxiomTypesV2} from "../libraries/AxiomTypesV2.sol";
  *      - UMA Optimistic Oracle: https://umaproject.org
  */
 interface IAxiomDispute {
+    function configureStakeConfig(AxiomTypesV2.StakeConfig calldata _config) external;
+
+    function setArbitrator(address _arbitrator, bool _approved) external;
+
     // ═══════════════════════════════════════════════════════════════════════════
     //                          DISPUTE INITIATION
     // ═══════════════════════════════════════════════════════════════════════════
@@ -51,11 +55,10 @@ interface IAxiomDispute {
      * @param _evidenceURI IPFS link to evidence supporting the dispute
      * @return disputeId Unique identifier for the dispute
      */
-    function initiateDispute(
-        bytes32 _recordId,
-        AxiomTypesV2.DisputeReason _reason,
-        string calldata _evidenceURI
-    ) external payable returns (bytes32 disputeId);
+    function initiateDispute(bytes32 _recordId, AxiomTypesV2.DisputeReason _reason, string calldata _evidenceURI)
+        external
+        payable
+        returns (bytes32 disputeId);
 
     /**
      * @notice Initiate dispute with ERC-20 token stake
@@ -96,10 +99,7 @@ interface IAxiomDispute {
      * @param _disputeId Dispute ID to respond to
      * @param _responseURI IPFS link to counter-evidence
      */
-    function respondToDispute(
-        bytes32 _disputeId,
-        string calldata _responseURI
-    ) external;
+    function respondToDispute(bytes32 _disputeId, string calldata _responseURI) external;
 
     /**
      * @notice Submit additional evidence during evidence period
@@ -113,10 +113,7 @@ interface IAxiomDispute {
      * @param _disputeId Dispute ID
      * @param _evidenceURI IPFS link to additional evidence
      */
-    function submitEvidence(
-        bytes32 _disputeId,
-        string calldata _evidenceURI
-    ) external;
+    function submitEvidence(bytes32 _disputeId, string calldata _evidenceURI) external;
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                       ARBITRATION ESCALATION
@@ -138,10 +135,7 @@ interface IAxiomDispute {
      * @param _disputeId Dispute ID to escalate
      * @param _arbitrator Address of the arbitration protocol
      */
-    function escalateToArbitration(
-        bytes32 _disputeId,
-        address _arbitrator
-    ) external payable;
+    function escalateToArbitration(bytes32 _disputeId, address _arbitrator) external payable;
 
     /**
      * @notice Receive ruling from external arbitrator
@@ -199,6 +193,8 @@ interface IAxiomDispute {
         bytes calldata _ownerSignature,
         bytes calldata _challengerSignature
     ) external;
+
+    function settlementDigest(bytes32 _disputeId, uint16 _challengerShare) external view returns (bytes32 digest);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                          STAKING & REWARDS
@@ -261,18 +257,14 @@ interface IAxiomDispute {
      * @param _appealReason IPFS link to appeal justification
      * @return appealId Unique appeal identifier
      */
-    function appeal(
-        bytes32 _disputeId,
-        string calldata _appealReason
-    ) external payable returns (bytes32 appealId);
+    function appeal(bytes32 _disputeId, string calldata _appealReason) external payable returns (bytes32 appealId);
 
     /**
      * @notice Get remaining time to appeal
      * @param _disputeId Dispute ID
      * @return remainingSeconds Seconds until appeal deadline (0 if expired)
      */
-    function getAppealDeadline(bytes32 _disputeId) 
-        external view returns (uint256 remainingSeconds);
+    function getAppealDeadline(bytes32 _disputeId) external view returns (uint256 remainingSeconds);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                          DISPUTE QUERIES
@@ -283,24 +275,21 @@ interface IAxiomDispute {
      * @param _disputeId Dispute ID to query
      * @return dispute Full Dispute struct
      */
-    function getDispute(bytes32 _disputeId) 
-        external view returns (AxiomTypesV2.Dispute memory dispute);
+    function getDispute(bytes32 _disputeId) external view returns (AxiomTypesV2.Dispute memory dispute);
 
     /**
      * @notice Get all disputes for a content record
      * @param _recordId Content record ID
      * @return disputeIds Array of dispute IDs
      */
-    function getDisputesByRecord(bytes32 _recordId) 
-        external view returns (bytes32[] memory disputeIds);
+    function getDisputesByRecord(bytes32 _recordId) external view returns (bytes32[] memory disputeIds);
 
     /**
      * @notice Get all disputes initiated by an address
      * @param _challenger Challenger address
      * @return disputeIds Array of dispute IDs
      */
-    function getDisputesByChallenger(address _challenger) 
-        external view returns (bytes32[] memory disputeIds);
+    function getDisputesByChallenger(address _challenger) external view returns (bytes32[] memory disputeIds);
 
     /**
      * @notice Get active disputes (not yet resolved)
@@ -308,8 +297,7 @@ interface IAxiomDispute {
      * @param _limit Maximum results to return
      * @return disputeIds Array of active dispute IDs
      */
-    function getActiveDisputes(uint256 _offset, uint256 _limit) 
-        external view returns (bytes32[] memory disputeIds);
+    function getActiveDisputes(uint256 _offset, uint256 _limit) external view returns (bytes32[] memory disputeIds);
 
     /**
      * @notice Check if content has any active disputes
@@ -341,8 +329,10 @@ interface IAxiomDispute {
      * @param _reason Dispute reason (affects subcourt selection)
      * @return fee Required fee in ETH
      */
-    function getArbitratorFee(address _arbitrator, AxiomTypesV2.DisputeReason _reason) 
-        external view returns (uint256 fee);
+    function getArbitratorFee(address _arbitrator, AxiomTypesV2.DisputeReason _reason)
+        external
+        view
+        returns (uint256 fee);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                              EVENTS
@@ -370,11 +360,7 @@ interface IAxiomDispute {
      * @param owner Content owner address
      * @param responseURI IPFS link to response
      */
-    event DisputeResponseSubmitted(
-        bytes32 indexed disputeId,
-        address indexed owner,
-        string responseURI
-    );
+    event DisputeResponseSubmitted(bytes32 indexed disputeId, address indexed owner, string responseURI);
 
     /**
      * @notice Emitted when additional evidence is submitted
@@ -382,11 +368,7 @@ interface IAxiomDispute {
      * @param submitter Address submitting evidence
      * @param evidenceURI IPFS link to evidence
      */
-    event EvidenceSubmitted(
-        bytes32 indexed disputeId,
-        address indexed submitter,
-        string evidenceURI
-    );
+    event EvidenceSubmitted(bytes32 indexed disputeId, address indexed submitter, string evidenceURI);
 
     /**
      * @notice Emitted when dispute is escalated to external arbitrator
@@ -394,11 +376,7 @@ interface IAxiomDispute {
      * @param arbitrator Address of arbitration protocol
      * @param externalDisputeId ID assigned by external arbitrator
      */
-    event DisputeEscalated(
-        bytes32 indexed disputeId,
-        address indexed arbitrator,
-        bytes32 externalDisputeId
-    );
+    event DisputeEscalated(bytes32 indexed disputeId, address indexed arbitrator, bytes32 externalDisputeId);
 
     /**
      * @notice Emitted when dispute is resolved
@@ -406,11 +384,7 @@ interface IAxiomDispute {
      * @param outcome Final status (RESOLVED_VALID or RESOLVED_INVALID)
      * @param winner Address of winning party
      */
-    event DisputeResolved(
-        bytes32 indexed disputeId,
-        AxiomTypesV2.DisputeStatus outcome,
-        address indexed winner
-    );
+    event DisputeResolved(bytes32 indexed disputeId, AxiomTypesV2.DisputeStatus outcome, address indexed winner);
 
     /**
      * @notice Emitted when dispute is settled by mutual agreement
@@ -418,11 +392,7 @@ interface IAxiomDispute {
      * @param challengerShare Percentage to challenger
      * @param ownerShare Percentage to owner
      */
-    event DisputeSettled(
-        bytes32 indexed disputeId,
-        uint16 challengerShare,
-        uint16 ownerShare
-    );
+    event DisputeSettled(bytes32 indexed disputeId, uint16 challengerShare, uint16 ownerShare);
 
     /**
      * @notice Emitted when stake is claimed after resolution
@@ -430,11 +400,7 @@ interface IAxiomDispute {
      * @param claimant Address claiming stake
      * @param amount Amount claimed
      */
-    event StakeClaimed(
-        bytes32 indexed disputeId,
-        address indexed claimant,
-        uint256 amount
-    );
+    event StakeClaimed(bytes32 indexed disputeId, address indexed claimant, uint256 amount);
 
     /**
      * @notice Emitted when dispute is appealed
@@ -444,9 +410,6 @@ interface IAxiomDispute {
      * @param additionalStake Extra stake for appeal
      */
     event DisputeAppealed(
-        bytes32 indexed disputeId,
-        bytes32 indexed appealId,
-        address indexed appellant,
-        uint256 additionalStake
+        bytes32 indexed disputeId, bytes32 indexed appealId, address indexed appellant, uint256 additionalStake
     );
 }

@@ -18,7 +18,7 @@ import {AxiomTypes} from "../../src/libraries/AxiomTypes.sol";
  *        Fuzzer → AxiomHandler.handler_*() → AxiomFacets(diamond).*(...)
  *
  *      Ghost Variables:
- *        ghost_totalETHStaked       — ETH currently locked in pending disputes
+ *        ghost_totalETHStaked       — ETH locked in unresolved or unclaimed disputes
  *        ghost_totalProtocolFees    — cumulative protocol fees from claimStake
  *        ghost_totalLicensesMinted  — total license NFTs minted
  *        ghost_bannedAddresses      — set of addresses banned via handler
@@ -66,9 +66,12 @@ contract AxiomHandler is Test {
     /// @notice License IDs created via handler
     uint256[] public createdLicenses;
 
+    /// @notice License NFT token IDs minted via handler
+    uint256[] public purchasedTokenIds;
+
     // ─────────────────────── Ghost Variables ──────────────────────────────────
 
-    /// @notice Expected ETH locked in pending disputes (increased on initiate, decreased on claim)
+    /// @notice Expected ETH locked in unresolved or unclaimed disputes (increased on initiate, decreased on claim)
     uint256 public ghost_totalETHStaked;
 
     /// @notice Expected cumulative protocol fees sent to treasury from claimStake
@@ -76,6 +79,22 @@ contract AxiomHandler is Test {
 
     /// @notice Expected total license NFTs minted via the handler
     uint256 public ghost_totalLicensesMinted;
+
+    /// @notice Per-action outcome accounting. Every handler call records exactly
+    ///         one success, protocol revert, or constrained-input skip.
+    mapping(bytes4 => uint256) public ghost_attemptsBySelector;
+    mapping(bytes4 => uint256) public ghost_successesBySelector;
+    mapping(bytes4 => uint256) public ghost_revertsBySelector;
+    mapping(bytes4 => uint256) public ghost_skipsBySelector;
+
+    uint256 public ghost_totalAttempts;
+    uint256 public ghost_totalSuccesses;
+    uint256 public ghost_totalReverts;
+    uint256 public ghost_totalSkips;
+
+    /// @notice Last caught revert, retained so a failing campaign is diagnosable.
+    bytes4 public ghost_lastRevertSelector;
+    bytes32 public ghost_lastRevertHash;
 
     /// @notice Addresses that were banned via the handler
     address[] public ghost_bannedAddresses;
@@ -94,6 +113,8 @@ contract AxiomHandler is Test {
 
     /// @notice Counter to generate unique hashes
     uint256 internal _nonce;
+
+    event HandlerCallReverted(bytes4 indexed selector, bytes32 indexed reasonHash);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                           CONSTRUCTOR
@@ -129,8 +150,14 @@ contract AxiomHandler is Test {
      * @param _actorSeed Fuzzed seed to select an actor.
      */
     function handler_register(uint256 _actorSeed) external {
-        address actor = _pickActor(_actorSeed);
-        if (ghost_isBanned[actor]) return; // Banned actors can't register
+        bytes4 selector = this.handler_register.selector;
+        _begin(selector);
+
+        (address actor, bool foundActor) = _pickUnbannedActor(_actorSeed);
+        if (!foundActor) {
+            _skip(selector);
+            return;
+        }
 
         // Generate unique content hash
         bytes32 contentHash = keccak256(abi.encodePacked("content", _nonce++));
@@ -141,8 +168,9 @@ contract AxiomHandler is Test {
         try diamond.register{value: baseFee}(contentHash, "ipfs://metadata") returns (bytes32 recordId) {
             registeredRecords.push(recordId);
             isRegistered[recordId] = true;
-        } catch {
-            // Silently skip if registration fails (e.g., rate limit)
+            _succeed(selector);
+        } catch (bytes memory reason) {
+            _reverted(selector, reason);
         }
     }
 
@@ -153,42 +181,57 @@ contract AxiomHandler is Test {
      * @param _recordSeed Fuzzed seed to select a registered record.
      */
     function handler_createAndPurchaseLicense(uint256 _recordSeed) external {
-        if (registeredRecords.length == 0) return;
+        bytes4 selector = this.handler_createAndPurchaseLicense.selector;
+        _begin(selector);
+        if (registeredRecords.length == 0) {
+            _skip(selector);
+            return;
+        }
 
         bytes32 recordId = _pickRecord(_recordSeed);
-        
+
         // Use the record's issuer as the licensor
         AxiomTypes.AxiomRecord memory record = diamond.getRecord(recordId);
         address licensor = record.issuer;
-        if (licensor == address(0)) return;
+        if (licensor == address(0)) {
+            _skip(selector);
+            return;
+        }
 
         // Create a free ETH license (price = 0, so no payment needed)
         vm.prank(licensor);
         try diamond.createLicense(
             recordId,
             AxiomTypesV2.LicenseType.CC_BY,
-            0,              // price = 0 (free)
-            address(0),     // ETH
-            250,            // 2.5% royalty
-            0,              // perpetual
-            false,          // not exclusive
-            false,          // not sublicensable
-            ""              // no custom terms
-        ) returns (uint256 licenseId) {
+            0, // price = 0 (free)
+            address(0), // ETH
+            250, // 2.5% royalty
+            0, // perpetual
+            false, // not exclusive
+            false, // not sublicensable
+            "" // no custom terms
+        ) returns (
+            uint256 licenseId
+        ) {
             createdLicenses.push(licenseId);
 
             // Now purchase from a random actor
-            address buyer = _pickActor(_recordSeed >> 128);
-            if (ghost_isBanned[buyer]) return;
+            (address buyer, bool foundBuyer) = _pickUnbannedActor(_recordSeed >> 128);
+            if (!foundBuyer) {
+                _skip(selector);
+                return;
+            }
 
             vm.prank(buyer);
-            try diamond.purchaseLicense(licenseId, 0) returns (uint256) {
+            try diamond.purchaseLicense(licenseId, 0) returns (uint256 tokenId) {
+                purchasedTokenIds.push(tokenId);
                 ghost_totalLicensesMinted++;
-            } catch {
-                // Purchase may fail (e.g., buyer == licensor issue, rate limit)
+                _succeed(selector);
+            } catch (bytes memory reason) {
+                _reverted(selector, reason);
             }
-        } catch {
-            // License creation may fail
+        } catch (bytes memory reason) {
+            _reverted(selector, reason);
         }
     }
 
@@ -199,25 +242,37 @@ contract AxiomHandler is Test {
      * @param _recordSeed Fuzzed seed to select a registered record.
      */
     function handler_initiateDispute(uint256 _recordSeed) external {
-        if (registeredRecords.length == 0) return;
+        bytes4 selector = this.handler_initiateDispute.selector;
+        _begin(selector);
+        if (registeredRecords.length == 0) {
+            _skip(selector);
+            return;
+        }
 
         bytes32 recordId = _pickRecord(_recordSeed);
-        
-        // Skip if already has an active dispute
-        if (hasActiveDisputeGhost[recordId]) return;
+        AxiomTypes.AxiomRecord memory record = diamond.getRecord(recordId);
 
-        address challenger = _pickActor(_recordSeed >> 64);
-        if (ghost_isBanned[challenger]) return;
-        
+        // Skip if already has an active dispute
+        if (hasActiveDisputeGhost[recordId]) {
+            _skip(selector);
+            return;
+        }
+
+        (address challenger, bool foundChallenger) = _pickUnbannedActorExcept(_recordSeed >> 64, record.issuer);
+        if (!foundChallenger) {
+            _skip(selector);
+            return;
+        }
+
         // Ensure challenger has enough ETH
         vm.deal(challenger, challenger.balance + minStake);
 
         vm.prank(challenger);
         try diamond.initiateDispute{value: minStake}(
-            recordId,
-            AxiomTypesV2.DisputeReason.COPYRIGHT_INFRINGEMENT,
-            "ipfs://evidence"
-        ) returns (bytes32 disputeId) {
+            recordId, AxiomTypesV2.DisputeReason.COPYRIGHT_INFRINGEMENT, "ipfs://evidence"
+        ) returns (
+            bytes32 disputeId
+        ) {
             // Track in pending pool
             _pendingDisputeIndex[disputeId] = pendingDisputes.length;
             pendingDisputes.push(disputeId);
@@ -226,8 +281,9 @@ contract AxiomHandler is Test {
 
             // Ghost: ETH is now locked in the Router
             ghost_totalETHStaked += minStake;
-        } catch {
-            // May fail due to stakeConfig.stakeToken != address(0) or other checks
+            _succeed(selector);
+        } catch (bytes memory reason) {
+            _reverted(selector, reason);
         }
     }
 
@@ -238,14 +294,19 @@ contract AxiomHandler is Test {
      * @param _disputeSeed Fuzzed seed to select a pending dispute.
      */
     function handler_resolveDispute(uint256 _disputeSeed) external {
-        if (pendingDisputes.length == 0) return;
+        bytes4 selector = this.handler_resolveDispute.selector;
+        _begin(selector);
+        if (pendingDisputes.length == 0) {
+            _skip(selector);
+            return;
+        }
 
         uint256 idx = _disputeSeed % pendingDisputes.length;
         bytes32 disputeId = pendingDisputes[idx];
 
         // Get dispute details to know the deadline
         AxiomTypesV2.Dispute memory dispute = diamond.getDispute(disputeId);
-        
+
         // Warp past deadline
         vm.warp(uint256(dispute.deadline) + 1);
 
@@ -254,8 +315,9 @@ contract AxiomHandler is Test {
             _removePendingDispute(idx);
             resolvedDisputes.push(disputeId);
             hasActiveDisputeGhost[dispute.recordId] = false;
-        } catch {
-            // May fail if status changed
+            _succeed(selector);
+        } catch (bytes memory reason) {
+            _reverted(selector, reason);
         }
     }
 
@@ -266,7 +328,12 @@ contract AxiomHandler is Test {
      * @param _disputeSeed Fuzzed seed to select a resolved dispute.
      */
     function handler_claimStake(uint256 _disputeSeed) external {
-        if (resolvedDisputes.length == 0) return;
+        bytes4 selector = this.handler_claimStake.selector;
+        _begin(selector);
+        if (resolvedDisputes.length == 0) {
+            _skip(selector);
+            return;
+        }
 
         uint256 idx = _disputeSeed % resolvedDisputes.length;
         bytes32 disputeId = resolvedDisputes[idx];
@@ -274,7 +341,10 @@ contract AxiomHandler is Test {
         AxiomTypesV2.Dispute memory dispute = diamond.getDispute(disputeId);
 
         // Already claimed (stakeAmount == 0)
-        if (dispute.stakeAmount == 0) return;
+        if (dispute.stakeAmount == 0) {
+            _skip(selector);
+            return;
+        }
 
         // Determine winner based on status
         address winner;
@@ -284,14 +354,19 @@ contract AxiomHandler is Test {
             // Need record owner — skip for simplicity if we can't determine
             try diamond.getRecord(dispute.recordId) returns (AxiomTypes.AxiomRecord memory record) {
                 winner = record.issuer;
-            } catch {
+            } catch (bytes memory reason) {
+                _reverted(selector, reason);
                 return;
             }
         } else {
+            _skip(selector);
             return;
         }
 
-        if (winner == address(0)) return;
+        if (winner == address(0)) {
+            _skip(selector);
+            return;
+        }
 
         uint256 stakeAmount = dispute.stakeAmount;
         uint256 protocolFee = (stakeAmount * protocolFeeBps) / 10000;
@@ -301,8 +376,10 @@ contract AxiomHandler is Test {
             // Ghost: ETH leaves the Router
             ghost_totalETHStaked -= stakeAmount;
             ghost_totalProtocolFees += protocolFee;
-        } catch {
-            // May fail if already claimed or unauthorized
+            _removeResolvedDispute(idx);
+            _succeed(selector);
+        } catch (bytes memory reason) {
+            _reverted(selector, reason);
         }
     }
 
@@ -312,15 +389,21 @@ contract AxiomHandler is Test {
      * @param _actorSeed Fuzzed seed to select an actor.
      */
     function handler_banAddress(uint256 _actorSeed) external {
+        bytes4 selector = this.handler_banAddress.selector;
+        _begin(selector);
         address target = _pickActor(_actorSeed);
-        if (ghost_isBanned[target]) return;
+        if (ghost_isBanned[target]) {
+            _skip(selector);
+            return;
+        }
 
         vm.prank(admin);
         try diamond.banAddress(target, "Invariant test ban") {
             ghost_bannedAddresses.push(target);
             ghost_isBanned[target] = true;
-        } catch {
-            // May fail
+            _succeed(selector);
+        } catch (bytes memory reason) {
+            _reverted(selector, reason);
         }
     }
 
@@ -330,6 +413,28 @@ contract AxiomHandler is Test {
 
     function _pickActor(uint256 _seed) internal view returns (address) {
         return actors[_seed % actors.length];
+    }
+
+    function _pickUnbannedActor(uint256 _seed) internal view returns (address actor, bool found) {
+        uint256 actorCount = actors.length;
+        uint256 start = _seed % actorCount;
+        for (uint256 i = 0; i < actorCount; i++) {
+            actor = actors[(start + i) % actorCount];
+            if (!ghost_isBanned[actor]) return (actor, true);
+        }
+    }
+
+    function _pickUnbannedActorExcept(uint256 _seed, address _excluded)
+        internal
+        view
+        returns (address actor, bool found)
+    {
+        uint256 actorCount = actors.length;
+        uint256 start = _seed % actorCount;
+        for (uint256 i = 0; i < actorCount; i++) {
+            actor = actors[(start + i) % actorCount];
+            if (actor != _excluded && !ghost_isBanned[actor]) return (actor, true);
+        }
     }
 
     function _pickRecord(uint256 _seed) internal view returns (bytes32) {
@@ -347,6 +452,38 @@ contract AxiomHandler is Test {
             _pendingDisputeIndex[lastId] = _idx;
         }
         pendingDisputes.pop();
+    }
+
+    function _removeResolvedDispute(uint256 _idx) internal {
+        uint256 lastIdx = resolvedDisputes.length - 1;
+        if (_idx != lastIdx) {
+            resolvedDisputes[_idx] = resolvedDisputes[lastIdx];
+        }
+        resolvedDisputes.pop();
+    }
+
+    function _begin(bytes4 _selector) internal {
+        ghost_totalAttempts++;
+        ghost_attemptsBySelector[_selector]++;
+    }
+
+    function _succeed(bytes4 _selector) internal {
+        ghost_totalSuccesses++;
+        ghost_successesBySelector[_selector]++;
+    }
+
+    function _skip(bytes4 _selector) internal {
+        ghost_totalSkips++;
+        ghost_skipsBySelector[_selector]++;
+    }
+
+    function _reverted(bytes4 _selector, bytes memory _reason) internal {
+        bytes32 reasonHash = keccak256(_reason);
+        ghost_totalReverts++;
+        ghost_revertsBySelector[_selector]++;
+        ghost_lastRevertSelector = _selector;
+        ghost_lastRevertHash = reasonHash;
+        emit HandlerCallReverted(_selector, reasonHash);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -367,6 +504,10 @@ contract AxiomHandler is Test {
 
     function getCreatedLicensesCount() external view returns (uint256) {
         return createdLicenses.length;
+    }
+
+    function getPurchasedTokenIdsCount() external view returns (uint256) {
+        return purchasedTokenIds.length;
     }
 
     function getBannedAddressesCount() external view returns (uint256) {

@@ -15,9 +15,9 @@ library AxiomTypes {
      * @dev Uses uint8 for gas optimization
      */
     enum ContentStatus {
-        ACTIVE,    // 0 - Content is valid and verified
-        REVOKED,   // 1 - Content was revoked by issuer
-        DISPUTED   // 2 - Content is under dispute (flagged by operator)
+        ACTIVE, // 0 - Content is valid and verified
+        REVOKED, // 1 - Content was revoked by issuer
+        DISPUTED // 2 - Content is under dispute (flagged by operator)
     }
 
     /**
@@ -25,9 +25,9 @@ library AxiomTypes {
      * @dev Currently only SHA256 is used, but designed for extensibility
      */
     enum HashAlgorithm {
-        SHA256,     // 0 - Default algorithm
-        SHA3_256,   // 1 - Future support
-        KECCAK256   // 2 - Native Ethereum hash
+        SHA256, // 0 - Default algorithm
+        SHA3_256, // 1 - Future support
+        KECCAK256 // 2 - Native Ethereum hash
     }
 
     // ============ Structs ============
@@ -40,12 +40,12 @@ library AxiomTypes {
      *      - Slot 3+: metadataURI (dynamic string)
      */
     struct AxiomRecord {
-        address issuer;         // 20 bytes - Wallet address that signed the content
-        uint40 timestamp;       // 5 bytes - Block timestamp (enough until year 36,812)
-        ContentStatus status;   // 1 byte - Current status of the record
+        address issuer; // 20 bytes - Wallet address that signed the content
+        uint40 timestamp; // 5 bytes - Block timestamp (enough until year 36,812)
+        ContentStatus status; // 1 byte - Current status of the record
         HashAlgorithm algorithm; // 1 byte - Hash algorithm used
-        bytes32 contentHash;    // 32 bytes - Hash of the content
-        string metadataURI;     // Dynamic - IPFS/Arweave link to metadata JSON
+        bytes32 contentHash; // 32 bytes - Hash of the content
+        string metadataURI; // Dynamic - IPFS/Arweave link to metadata JSON
     }
 
     /**
@@ -53,10 +53,10 @@ library AxiomTypes {
      * @dev Used for DID resolution
      */
     struct IdentityInfo {
-        string name;            // Display name (e.g., "Reuters News")
-        string proofURI;        // Link to identity proof document
-        bool isVerified;        // Whether identity has been verified by operator
-        uint40 registeredAt;    // When identity was registered
+        string name; // Display name (e.g., "Reuters News")
+        string proofURI; // Link to identity proof document
+        bool isVerified; // Whether identity has been verified by operator
+        uint40 registeredAt; // When identity was registered
     }
 
     /**
@@ -64,11 +64,11 @@ library AxiomTypes {
      * @dev This struct is for documentation, actual data stored as JSON
      */
     struct ContentMetadata {
-        string title;           // Title of the content
-        string description;     // Description of the content
-        string contentType;     // MIME type (e.g., "image/jpeg", "application/pdf")
-        string[] tags;          // Searchable tags
-        uint256 fileSize;       // Size in bytes
+        string title; // Title of the content
+        string description; // Description of the content
+        string contentType; // MIME type (e.g., "image/jpeg", "application/pdf")
+        string[] tags; // Searchable tags
+        uint256 fileSize; // Size in bytes
         string originalFilename; // Original filename
     }
 
@@ -78,56 +78,33 @@ library AxiomTypes {
      * @notice Emitted when new content is registered
      */
     event ContentRegistered(
-        bytes32 indexed recordId,
-        address indexed issuer,
-        bytes32 contentHash,
-        uint40 timestamp,
-        string metadataURI
+        bytes32 indexed recordId, address indexed issuer, bytes32 contentHash, uint40 timestamp, string metadataURI
     );
 
     /**
      * @notice Emitted when content is revoked
      */
-    event ContentRevoked(
-        bytes32 indexed recordId,
-        address indexed issuer,
-        string reason
-    );
+    event ContentRevoked(bytes32 indexed recordId, address indexed issuer, string reason);
 
     /**
      * @notice Emitted when content status changes to disputed
      */
-    event ContentDisputed(
-        bytes32 indexed recordId,
-        address indexed operator,
-        string reason
-    );
+    event ContentDisputed(bytes32 indexed recordId, address indexed operator, string reason);
 
     /**
      * @notice Emitted when identity is registered
      */
-    event IdentityRegistered(
-        address indexed user,
-        string name,
-        string proofURI
-    );
+    event IdentityRegistered(address indexed user, string name, string proofURI);
 
     /**
      * @notice Emitted when identity is verified by operator
      */
-    event IdentityVerified(
-        address indexed user,
-        address indexed verifier
-    );
+    event IdentityVerified(address indexed user, address indexed verifier);
 
     /**
      * @notice Emitted when fee is collected
      */
-    event FeeCollected(
-        address indexed payer,
-        uint256 amount,
-        bytes32 indexed recordId
-    );
+    event FeeCollected(address indexed payer, uint256 amount, bytes32 indexed recordId);
 
     // ============ Errors ============
 

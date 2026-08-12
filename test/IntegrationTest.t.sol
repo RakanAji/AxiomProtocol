@@ -6,7 +6,6 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 
 // Core
 import {AxiomRouter} from "../src/AxiomRouter.sol";
-import {AxiomStorage} from "../src/storage/AxiomStorage.sol";
 import {AxiomTypes} from "../src/libraries/AxiomTypes.sol";
 import {AxiomTypesV2} from "../src/libraries/AxiomTypesV2.sol";
 
@@ -25,6 +24,7 @@ import {MockVerifier} from "./mocks/MockVerifier.sol";
 
 // Interface
 import {AxiomFacets} from "../src/interfaces/AxiomFacets.sol";
+import {AxiomSelectorManifest} from "../script/AxiomSelectorManifest.sol";
 
 /**
  * @title IntegrationTest
@@ -69,11 +69,7 @@ contract IntegrationTest is Test {
     function setUp() public {
         // Deploy implementation + proxy
         AxiomRouter routerImpl = new AxiomRouter();
-        bytes memory initData = abi.encodeWithSelector(
-            AxiomRouter.initialize.selector,
-            admin,
-            treasury
-        );
+        bytes memory initData = abi.encodeWithSelector(AxiomRouter.initialize.selector, admin, treasury);
         ERC1967Proxy proxy = new ERC1967Proxy(address(routerImpl), initData);
         router = AxiomRouter(payable(address(proxy)));
         diamond = AxiomFacets(payable(address(proxy)));
@@ -100,6 +96,20 @@ contract IntegrationTest is Test {
         _wireDisputeFacet();
         _wirePrivacyFacet();
 
+        diamond.configureStakeConfig(
+            AxiomTypesV2.StakeConfig({
+                minStakeAmount: 0.01 ether,
+                minAppealStake: 0.02 ether,
+                stakeToken: address(0),
+                protocolFeeBps: 500,
+                rewardBps: 0,
+                slashBps: 0,
+                responsePeriod: 3 days,
+                evidencePeriod: 3 days,
+                appealPeriod: 3 days
+            })
+        );
+
         // Configure ZK verifier: inject MockVerifier for testing
         // In production, this would be the real Groth16Verifier address
         diamond.setZKVerifier(address(mockVerifier));
@@ -123,13 +133,9 @@ contract IntegrationTest is Test {
         // ── Step 1: Creator registers DID ──
         console2.log("Step 1: Registering DID...");
         vm.startPrank(creator);
-        
-        diamond.registerDID(
-            "did:ethr:31337:0xC1",
-            keccak256("did-doc-hash"),
-            "publicKeyJwk"
-        );
-        
+
+        diamond.registerDID("did:ethr:31337:0xC1", keccak256("did-doc-hash"), "publicKeyJwk");
+
         assertTrue(diamond.hasDID(creator), "Creator should have a DID");
         assertTrue(diamond.isDIDActive(creator), "DID should be active");
         assertEq(diamond.getDIDString(creator), "did:ethr:31337:0xC1");
@@ -139,13 +145,10 @@ contract IntegrationTest is Test {
         // ── Step 2: Creator registers content ──
         console2.log("Step 2: Registering content...");
         bytes32 contentHash = keccak256("my-original-photograph");
-        
+
         vm.prank(creator);
-        bytes32 recordId = diamond.register{value: BASE_FEE}(
-            contentHash,
-            "ipfs://QmContentMetadata"
-        );
-        
+        bytes32 recordId = diamond.register{value: BASE_FEE}(contentHash, "ipfs://QmContentMetadata");
+
         assertTrue(recordId != bytes32(0), "Record ID should be non-zero");
         AxiomTypes.AxiomRecord memory record = diamond.getRecord(recordId);
         assertEq(record.issuer, creator, "Issuer should be creator");
@@ -159,26 +162,23 @@ contract IntegrationTest is Test {
         uint256 licenseId = diamond.createLicense(
             recordId,
             AxiomTypesV2.LicenseType.CC_BY,
-            0.01 ether,             // price
-            address(0),             // ETH payment
-            500,                    // 5% royalty
+            0.01 ether, // price
+            address(0), // ETH payment
+            500, // 5% royalty
             uint40(block.timestamp + 365 days),
-            false,                  // non-exclusive
-            false,                  // non-sublicensable
+            false, // non-exclusive
+            false, // non-sublicensable
             "ipfs://QmLicenseTerms"
         );
-        
+
         assertTrue(licenseId > 0, "License ID should be positive");
         console2.log("   License created, licenseId:", licenseId);
 
         // ── Step 4: Buyer purchases the license ──
         console2.log("Step 4: Buyer purchasing license...");
         vm.prank(buyer);
-        uint256 tokenId = diamond.purchaseLicense{value: 0.01 ether}(
-            licenseId,
-            uint40(365 days)
-        );
-        
+        uint256 tokenId = diamond.purchaseLicense{value: 0.01 ether}(licenseId, uint40(365 days));
+
         assertTrue(tokenId > 0, "Token ID should be positive");
         console2.log("   License purchased, tokenId:", tokenId);
 
@@ -197,13 +197,9 @@ contract IntegrationTest is Test {
 
         vm.prank(creator);
         bytes32 privateRecordId = diamond.privateRegister{value: 0}(
-            privateContentHash,
-            commitment,
-            nullifierHash,
-            validProof,
-            "ipfs://QmPrivateMetadata"
+            privateContentHash, commitment, nullifierHash, validProof, "ipfs://QmPrivateMetadata"
         );
-        
+
         assertTrue(privateRecordId != bytes32(0), "Private record ID should be non-zero");
         assertTrue(diamond.nullifierUsed(nullifierHash), "Nullifier should be used");
         assertTrue(diamond.contentExists(privateContentHash), "Content should exist");
@@ -211,11 +207,7 @@ contract IntegrationTest is Test {
 
         // ── Step 7: Verify ownership via ZK proof ──
         console2.log("Step 7: Verifying private ownership...");
-        bool isOwner = diamond.verifyOwnership(
-            privateRecordId,
-            commitment,
-            validProof
-        );
+        bool isOwner = diamond.verifyOwnership(privateRecordId, commitment, validProof);
         assertTrue(isOwner, "Ownership verification should pass");
         console2.log("   Ownership verified via ZK proof");
 
@@ -246,9 +238,7 @@ contract IntegrationTest is Test {
 
         // Second registration with same nullifier should fail
         vm.prank(creator);
-        vm.expectRevert(
-            abi.encodeWithSelector(AxiomTypesV2.NullifierAlreadyUsed.selector, nullifierHash)
-        );
+        vm.expectRevert(abi.encodeWithSelector(AxiomTypesV2.NullifierAlreadyUsed.selector, nullifierHash));
         diamond.privateRegister(
             keccak256("different-content"),
             keccak256("commitment2"),
@@ -284,17 +274,27 @@ contract IntegrationTest is Test {
         bytes memory validProof = _buildDummyProof();
 
         vm.prank(creator);
-        bytes32 recordId = diamond.privateRegister(
-            contentHash, commitment, nullifierHash, validProof, ""
-        );
+        bytes32 recordId = diamond.privateRegister(contentHash, commitment, nullifierHash, validProof, "");
 
         // Wrong commitment should return false
-        bool isOwner = diamond.verifyOwnership(
-            recordId,
-            keccak256("wrong-commitment"),
-            validProof
-        );
+        bool isOwner = diamond.verifyOwnership(recordId, keccak256("wrong-commitment"), validProof);
         assertFalse(isOwner, "Wrong commitment should fail verification");
+    }
+
+    function test_PrivacyMockVerifierCannotBeProductionApproved() public {
+        assertFalse(diamond.isZKVerifierProductionApproved());
+
+        vm.prank(admin);
+        vm.expectRevert("PrivacyFacet: Unsupported public input schema");
+        diamond.approveZKVerifierForProduction();
+
+        assertFalse(diamond.isZKVerifierProductionApproved());
+    }
+
+    function test_PrivacyVerifierConfigurationIsAdminOnly() public {
+        vm.prank(creator);
+        vm.expectRevert("PrivacyFacet: Missing required role");
+        diamond.setZKVerifier(address(mockVerifier));
     }
 
     /**
@@ -304,18 +304,35 @@ contract IntegrationTest is Test {
         // Register DID
         vm.startPrank(creator);
         diamond.registerDID("did:ethr:31337:creator", keccak256("doc"), "jwk");
-        
+
         // Register content through the same proxy
-        bytes32 recordId = diamond.register{value: BASE_FEE}(
-            keccak256("cross-facet-content"),
-            "ipfs://cross"
-        );
+        bytes32 recordId = diamond.register{value: BASE_FEE}(keccak256("cross-facet-content"), "ipfs://cross");
         vm.stopPrank();
 
         // Both should be queryable via the same proxy
         assertTrue(diamond.hasDID(creator));
         assertTrue(recordId != bytes32(0));
         assertEq(diamond.getRecord(recordId).issuer, creator);
+    }
+
+    function test_RegistryEnumerationPagination() public {
+        bytes32[] memory expected = new bytes32[](3);
+        for (uint256 i = 0; i < expected.length; i++) {
+            vm.prank(creator);
+            expected[i] =
+                diamond.register{value: BASE_FEE}(keccak256(abi.encode("enumerated-content", i)), "ipfs://enumerated");
+        }
+
+        bytes32[] memory firstPage = diamond.getRecordIds(0, 2);
+        assertEq(firstPage.length, 2);
+        assertEq(firstPage[0], expected[0]);
+        assertEq(firstPage[1], expected[1]);
+
+        bytes32[] memory secondPage = diamond.getRecordIds(2, 2);
+        assertEq(secondPage.length, 1);
+        assertEq(secondPage[0], expected[2]);
+        assertEq(diamond.getRecordIds(3, 1).length, 0);
+        assertEq(diamond.getRecordIds(0, 0).length, 0);
     }
 
     /**
@@ -327,12 +344,8 @@ contract IntegrationTest is Test {
 
         // Register multiple private records with same commitment
         vm.startPrank(creator);
-        bytes32 record1 = diamond.privateRegister(
-            keccak256("content1"), commitment, keccak256("null1"), validProof, ""
-        );
-        bytes32 record2 = diamond.privateRegister(
-            keccak256("content2"), commitment, keccak256("null2"), validProof, ""
-        );
+        bytes32 record1 = diamond.privateRegister(keccak256("content1"), commitment, keccak256("null1"), validProof, "");
+        bytes32 record2 = diamond.privateRegister(keccak256("content2"), commitment, keccak256("null2"), validProof, "");
         vm.stopPrank();
 
         bytes32[] memory records = diamond.getRecordsByCommitment(commitment);
@@ -344,141 +357,35 @@ contract IntegrationTest is Test {
     // ============ Selector Wiring Helpers ============
 
     function _wireRegistryFacet() internal {
-        bytes4[] memory sel = new bytes4[](7);
-        sel[0] = AxiomRegistry.register.selector;
-        sel[1] = AxiomRegistry.batchRegister.selector;
-        sel[2] = AxiomRegistry.revoke.selector;
-        sel[3] = AxiomRegistry.verify.selector;
-        sel[4] = AxiomRegistry.getRecord.selector;
-        sel[5] = AxiomRegistry.getRecordsByIssuer.selector;
-        sel[6] = AxiomRegistry.getTotalRecords.selector;
-        router.addFacetSelectors(address(registryFacet), sel);
+        router.addFacetSelectors(address(registryFacet), AxiomSelectorManifest.registrySelectors());
     }
 
     function _wireTreasuryFacet() internal {
-        bytes4[] memory sel = new bytes4[](10);
-        sel[0] = AxiomTreasury.setBaseFee.selector;
-        sel[1] = AxiomTreasury.setEnterpriseRate.selector;
-        sel[2] = AxiomTreasury.grantEnterpriseStatus.selector;
-        sel[3] = AxiomTreasury.revokeEnterpriseStatus.selector;
-        sel[4] = AxiomTreasury.withdraw.selector;
-        sel[5] = AxiomTreasury.setTreasuryWallet.selector;
-        sel[6] = AxiomTreasury.getFee.selector;
-        sel[7] = AxiomTreasury.getBaseFee.selector;
-        sel[8] = AxiomTreasury.getTotalFeesCollected.selector;
-        sel[9] = AxiomTreasury.isEnterpriseUser.selector;
-        router.addFacetSelectors(address(treasuryFacet), sel);
+        router.addFacetSelectors(address(treasuryFacet), AxiomSelectorManifest.treasurySelectors());
     }
 
     function _wireIdentityFacet() internal {
-        bytes4[] memory sel = new bytes4[](7);
-        sel[0] = AxiomIdentity.registerIdentity.selector;
-        sel[1] = AxiomIdentity.updateIdentity.selector;
-        sel[2] = AxiomIdentity.verifyIdentity.selector;
-        sel[3] = AxiomIdentity.revokeVerification.selector;
-        sel[4] = AxiomIdentity.resolveIdentity.selector;
-        sel[5] = AxiomIdentity.resolveByName.selector;
-        sel[6] = AxiomIdentity.isIdentityVerified.selector;
-        router.addFacetSelectors(address(identityFacet), sel);
+        router.addFacetSelectors(address(identityFacet), AxiomSelectorManifest.identitySelectors());
     }
 
     function _wireAccessFacet() internal {
-        bytes4[] memory sel = new bytes4[](6);
-        sel[0] = AxiomAccess.banAddress.selector;
-        sel[1] = AxiomAccess.unbanAddress.selector;
-        sel[2] = AxiomAccess.isBanned.selector;
-        sel[3] = AxiomAccess.disputeContent.selector;
-        sel[4] = AxiomAccess.setRateLimit.selector;
-        sel[5] = AxiomAccess.setMaxBatchSize.selector;
-        router.addFacetSelectors(address(accessFacet), sel);
+        router.addFacetSelectors(address(accessFacet), AxiomSelectorManifest.accessSelectors());
     }
 
     function _wireDIDFacet() internal {
-        bytes4[] memory sel = new bytes4[](19);
-        sel[0] = AxiomDIDRegistry.registerDID.selector;
-        sel[1] = AxiomDIDRegistry.updateDIDDocument.selector;
-        sel[2] = AxiomDIDRegistry.setServiceEndpoint.selector;
-        sel[3] = AxiomDIDRegistry.revokeDID.selector;
-        sel[4] = AxiomDIDRegistry.addDelegate.selector;
-        sel[5] = AxiomDIDRegistry.revokeDelegate.selector;
-        sel[6] = AxiomDIDRegistry.validDelegate.selector;
-        sel[7] = AxiomDIDRegistry.getDelegates.selector;
-        sel[8] = AxiomDIDRegistry.setVerificationLevel.selector;
-        sel[9] = AxiomDIDRegistry.getVerificationLevel.selector;
-        sel[10] = AxiomDIDRegistry.meetsVerificationLevel.selector;
-        sel[11] = AxiomDIDRegistry.resolveDID.selector;
-        sel[12] = AxiomDIDRegistry.getIdentity.selector;
-        sel[13] = AxiomDIDRegistry.hasDID.selector;
-        sel[14] = AxiomDIDRegistry.isDIDActive.selector;
-        sel[15] = AxiomDIDRegistry.getDIDString.selector;
-        sel[16] = AxiomDIDRegistry.setAttribute.selector;
-        sel[17] = AxiomDIDRegistry.revokeAttribute.selector;
-        sel[18] = AxiomDIDRegistry.verifySignature.selector;
-        router.addFacetSelectors(address(didFacet), sel);
+        router.addFacetSelectors(address(didFacet), AxiomSelectorManifest.didSelectors());
     }
 
     function _wireLicenseFacet() internal {
-        bytes4[] memory sel = new bytes4[](24);
-        sel[0] = AxiomLicenseFacet.createLicense.selector;
-        sel[1] = AxiomLicenseFacet.updateLicense.selector;
-        sel[2] = AxiomLicenseFacet.deactivateLicense.selector;
-        sel[3] = AxiomLicenseFacet.purchaseLicense.selector;
-        sel[4] = AxiomLicenseFacet.purchaseLicenseFor.selector;
-        sel[5] = AxiomLicenseFacet.balanceOf.selector;
-        sel[6] = AxiomLicenseFacet.ownerOf.selector;
-        sel[7] = bytes4(keccak256("transferFrom(address,address,uint256)"));
-        sel[8] = bytes4(keccak256("safeTransferFrom(address,address,uint256)"));
-        sel[9] = bytes4(keccak256("safeTransferFrom(address,address,uint256,bytes)"));
-        sel[10] = AxiomLicenseFacet.approve.selector;
-        sel[11] = AxiomLicenseFacet.setApprovalForAll.selector;
-        sel[12] = AxiomLicenseFacet.getApproved.selector;
-        sel[13] = AxiomLicenseFacet.isApprovedForAll.selector;
-        sel[14] = AxiomLicenseFacet.name.selector;
-        sel[15] = AxiomLicenseFacet.symbol.selector;
-        sel[16] = AxiomLicenseFacet.tokenURI.selector;
-        sel[17] = AxiomLicenseFacet.royaltyInfo.selector;
-        sel[18] = AxiomLicenseFacet.setRoyaltySplit.selector;
-        sel[19] = AxiomLicenseFacet.getLicense.selector;
-        sel[20] = AxiomLicenseFacet.getLicensesByRecord.selector;
-        sel[21] = AxiomLicenseFacet.isLicenseValid.selector;
-        sel[22] = AxiomLicenseFacet.getRoyaltySplit.selector;
-        sel[23] = AxiomLicenseFacet.supportsInterface.selector;
-        router.addFacetSelectors(address(licenseFacet), sel);
+        router.addFacetSelectors(address(licenseFacet), AxiomSelectorManifest.licenseSelectors());
     }
 
     function _wireDisputeFacet() internal {
-        bytes4[] memory sel = new bytes4[](13);
-        sel[0] = AxiomDisputeFacet.initiateDispute.selector;
-        sel[1] = AxiomDisputeFacet.initiateDisputeWithToken.selector;
-        sel[2] = AxiomDisputeFacet.respondToDispute.selector;
-        sel[3] = AxiomDisputeFacet.submitEvidence.selector;
-        sel[4] = AxiomDisputeFacet.escalateToArbitration.selector;
-        sel[5] = AxiomDisputeFacet.resolveByTimeout.selector;
-        sel[6] = AxiomDisputeFacet.claimStake.selector;
-        sel[7] = AxiomDisputeFacet.getDispute.selector;
-        sel[8] = AxiomDisputeFacet.getDisputesByRecord.selector;
-        sel[9] = AxiomDisputeFacet.hasActiveDispute.selector;
-        sel[10] = AxiomDisputeFacet.getStakeConfig.selector;
-        sel[11] = AxiomDisputeFacet.getApprovedArbitrators.selector;
-        sel[12] = AxiomDisputeFacet.isArbitratorApproved.selector;
-        router.addFacetSelectors(address(disputeFacet), sel);
+        router.addFacetSelectors(address(disputeFacet), AxiomSelectorManifest.disputeSelectors());
     }
 
     function _wirePrivacyFacet() internal {
-        bytes4[] memory sel = new bytes4[](12);
-        sel[0] = AxiomPrivacyFacet.privateRegister.selector;
-        sel[1] = AxiomPrivacyFacet.verifyOwnership.selector;
-        sel[2] = AxiomPrivacyFacet.requestErasure.selector;
-        sel[3] = AxiomPrivacyFacet.confirmErasure.selector;
-        sel[4] = AxiomPrivacyFacet.getPrivateRecord.selector;
-        sel[5] = AxiomPrivacyFacet.contentExists.selector;
-        sel[6] = AxiomPrivacyFacet.nullifierUsed.selector;
-        sel[7] = AxiomPrivacyFacet.isMetadataDeleted.selector;
-        sel[8] = AxiomPrivacyFacet.getGDPRRequest.selector;
-        sel[9] = AxiomPrivacyFacet.getRecordsByCommitment.selector;
-        sel[10] = AxiomPrivacyFacet.setZKVerifier.selector;
-        sel[11] = AxiomPrivacyFacet.getZKVerifier.selector;
-        router.addFacetSelectors(address(privacyFacet), sel);
+        router.addFacetSelectors(address(privacyFacet), AxiomSelectorManifest.privacySelectors());
     }
 
     // ============ Proof Construction Helper ============

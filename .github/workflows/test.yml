@@ -1,5 +1,7 @@
 name: CI
 
+permissions: {}
+
 on:
   push:
   pull_request:
@@ -15,13 +17,18 @@ jobs:
 
     name: Foundry project
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           submodules: recursive
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
 
       - name: Show Forge version
         run: |
@@ -41,3 +48,76 @@ jobs:
         run: |
           forge test -vvv
         id: test
+
+      - name: Generate canonical router ABI
+        run: |
+          forge inspect AxiomFacets abi --json > axiom-router-abi.json
+          forge inspect AxiomFacets methodIdentifiers --json > axiom-router-methods.json
+          abi_count="$(jq '[.[] | select(.type == "function")] | length' axiom-router-abi.json)"
+          selector_count="$(jq 'length' axiom-router-methods.json)"
+          test "$abi_count" -eq 121
+          test "$selector_count" -eq 121
+          jq -e '
+            [
+              (has("supportsInterface(bytes4)") | not),
+              (has("pause()") | not),
+              (has("unpause()") | not),
+              (has("disputeContent(bytes32,string)") | not),
+              (has("nonce(address)") | not),
+              (has("claimRoyalties(bytes32)") | not),
+              (has("createSublicense(uint256,uint256,uint40)") | not)
+            ] | all
+          ' axiom-router-methods.json
+
+      - name: Upload canonical router ABI
+        uses: actions/upload-artifact@v4
+        with:
+          name: axiom-router-abi
+          path: |
+            axiom-router-abi.json
+            axiom-router-methods.json
+          if-no-files-found: error
+
+  coverage:
+    name: Coverage gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+
+      - name: Generate coverage
+        run: |
+          forge coverage --ir-minimum --exclude-tests --report lcov --report summary \
+            --report-file lcov.info
+
+      - name: Enforce coverage floor
+        run: |
+          awk -F: '
+            /^LF:/ { lines_found += $2 }
+            /^LH:/ { lines_hit += $2 }
+            /^FNF:/ { funcs_found += $2 }
+            /^FNH:/ { funcs_hit += $2 }
+            END {
+              line_rate = lines_found ? (100 * lines_hit / lines_found) : 0
+              func_rate = funcs_found ? (100 * funcs_hit / funcs_found) : 0
+              printf "Line coverage: %.2f%% (%d/%d)\n", line_rate, lines_hit, lines_found
+              printf "Function coverage: %.2f%% (%d/%d)\n", func_rate, funcs_hit, funcs_found
+              if (line_rate < 65 || func_rate < 60) exit 1
+            }
+          ' lcov.info
+
+      - name: Upload coverage trace
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info
+          if-no-files-found: error

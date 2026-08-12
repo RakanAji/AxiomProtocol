@@ -6,19 +6,28 @@ import {AxiomTypes} from "../libraries/AxiomTypes.sol";
 import {AxiomStorage} from "../storage/AxiomStorage.sol";
 import {IAxiomTreasury} from "../interfaces/IAxiomTreasury.sol";
 
+interface IRouterAccessControl {
+    function hasRole(bytes32 role, address account) external view returns (bool);
+}
+
 /**
  * @title AxiomTreasury
  * @author Axiom Protocol Team
  * @notice Treasury management for fee collection and distribution
  */
 contract AxiomTreasury is Initializable, IAxiomTreasury {
+    bytes32 private constant DEFAULT_ADMIN_ROLE = 0x00;
+
     // ============ Modifiers ============
 
     /**
      * @dev Ensures caller has admin role (checked via router)
      */
     modifier onlyAdmin() {
-        // This will be enforced by AxiomRouter via access control
+        require(
+            IRouterAccessControl(address(this)).hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
+            "AxiomTreasury: missing admin role"
+        );
         _;
     }
 
@@ -61,8 +70,10 @@ contract AxiomTreasury is Initializable, IAxiomTreasury {
      */
     function withdraw(address _to, uint256 _amount) external override onlyAdmin {
         require(_to != address(0), "Invalid recipient");
-        require(address(this).balance >= _amount, "Insufficient balance");
-        
+        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
+        uint256 available = address(this).balance - s.totalEscrowedNativeStake;
+        require(available >= _amount, "Insufficient unreserved balance");
+
         (bool success,) = payable(_to).call{value: _amount}("");
         require(success, "Transfer failed");
     }
@@ -83,11 +94,11 @@ contract AxiomTreasury is Initializable, IAxiomTreasury {
      */
     function getFee(address _user) external view override returns (uint256) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         if (s.isEnterprise[_user] && s.enterpriseRates[_user] > 0) {
             return s.enterpriseRates[_user];
         }
-        
+
         return s.baseFee;
     }
 

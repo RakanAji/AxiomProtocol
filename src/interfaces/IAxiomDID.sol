@@ -8,7 +8,7 @@ import {AxiomTypesV2} from "../libraries/AxiomTypesV2.sol";
  * @author Axiom Protocol Team
  * @notice Interface for Decentralized Identifier (DID) management
  * @dev Compatible with ERC-1056 (Lightweight Identity) and W3C DID Core Specification
- *      
+ *
  *      This interface enables:
  *      - Registration of DIDs following did:ethr method
  *      - Delegate authorization for signing on behalf of identities
@@ -28,7 +28,7 @@ interface IAxiomDID {
      * @notice Register a new DID linked to the caller's wallet address
      * @dev The DID string should follow did:ethr format: "did:ethr:{chainId}:{address}"
      *      The DID Document should be a valid JSON-LD document stored on IPFS
-     *      
+     *
      *      Requirements:
      *      - Caller must not have an existing DID
      *      - DID string must not be empty
@@ -40,11 +40,7 @@ interface IAxiomDID {
      * @param _didDocumentHash IPFS hash (CID) of the DID Document JSON
      * @param _publicKeyJwk Public key in JWK format for signature verification
      */
-    function registerDID(
-        string calldata _did,
-        bytes32 _didDocumentHash,
-        string calldata _publicKeyJwk
-    ) external;
+    function registerDID(string calldata _did, bytes32 _didDocumentHash, string calldata _publicKeyJwk) external;
 
     /**
      * @notice Update an existing DID Document
@@ -108,11 +104,7 @@ interface IAxiomDID {
      * @param _delegateType Type of delegation (keccak256 hash of type string)
      * @param _validity Duration in seconds for delegation validity
      */
-    function addDelegate(
-        address _delegate,
-        bytes32 _delegateType,
-        uint256 _validity
-    ) external;
+    function addDelegate(address _delegate, bytes32 _delegateType, uint256 _validity) external;
 
     /**
      * @notice Revoke a delegate's authorization
@@ -138,19 +130,17 @@ interface IAxiomDID {
      * @param _delegate Address of the potential delegate
      * @return isValid Whether the delegate is currently authorized
      */
-    function validDelegate(
-        address _identity,
-        bytes32 _delegateType,
-        address _delegate
-    ) external view returns (bool isValid);
+    function validDelegate(address _identity, bytes32 _delegateType, address _delegate)
+        external
+        view
+        returns (bool isValid);
 
     /**
      * @notice Get all active delegates for an identity
      * @param _identity The identity address
      * @return delegates Array of active DIDDelegate structs
      */
-    function getDelegates(address _identity) 
-        external view returns (AxiomTypesV2.DIDDelegate[] memory delegates);
+    function getDelegates(address _identity) external view returns (AxiomTypesV2.DIDDelegate[] memory delegates);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                       VERIFICATION LEVEL MANAGEMENT
@@ -159,7 +149,7 @@ interface IAxiomDID {
     /**
      * @notice Set verification level for an identity (requires VERIFIER_ROLE)
      * @dev Verification is performed off-chain, this function records the result
-     *      
+     *
      *      Verification levels:
      *      - NONE: Self-declared only
      *      - BASIC: Email/phone verified
@@ -175,18 +165,14 @@ interface IAxiomDID {
      * @param _user Address of the identity to verify
      * @param _level New verification level to assign
      */
-    function setVerificationLevel(
-        address _user,
-        AxiomTypesV2.VerificationLevel _level
-    ) external;
+    function setVerificationLevel(address _user, AxiomTypesV2.VerificationLevel _level) external;
 
     /**
      * @notice Get current verification level for an identity
      * @param _user Address to check
      * @return level Current verification level
      */
-    function getVerificationLevel(address _user) 
-        external view returns (AxiomTypesV2.VerificationLevel level);
+    function getVerificationLevel(address _user) external view returns (AxiomTypesV2.VerificationLevel level);
 
     /**
      * @notice Check if identity meets minimum verification requirement
@@ -196,10 +182,10 @@ interface IAxiomDID {
      * @param _minLevel Minimum required verification level
      * @return meetsRequirement Whether identity meets or exceeds minimum level
      */
-    function meetsVerificationLevel(
-        address _user,
-        AxiomTypesV2.VerificationLevel _minLevel
-    ) external view returns (bool meetsRequirement);
+    function meetsVerificationLevel(address _user, AxiomTypesV2.VerificationLevel _minLevel)
+        external
+        view
+        returns (bool meetsRequirement);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                            DID RESOLUTION
@@ -212,8 +198,7 @@ interface IAxiomDID {
      * @param _did The DID string to resolve
      * @return identity Full DIDIdentity struct
      */
-    function resolveDID(string calldata _did) 
-        external view returns (AxiomTypesV2.DIDIdentity memory identity);
+    function resolveDID(string calldata _did) external view returns (AxiomTypesV2.DIDIdentity memory identity);
 
     /**
      * @notice Get DID identity by wallet address
@@ -222,8 +207,7 @@ interface IAxiomDID {
      * @param _user Wallet address to look up
      * @return identity Full DIDIdentity struct
      */
-    function getIdentity(address _user) 
-        external view returns (AxiomTypesV2.DIDIdentity memory identity);
+    function getIdentity(address _user) external view returns (AxiomTypesV2.DIDIdentity memory identity);
 
     /**
      * @notice Check if an address has a registered DID
@@ -265,11 +249,7 @@ interface IAxiomDID {
      * @param _value Attribute value
      * @param _validity How long attribute is valid (seconds)
      */
-    function setAttribute(
-        bytes32 _name,
-        bytes calldata _value,
-        uint256 _validity
-    ) external;
+    function setAttribute(bytes32 _name, bytes calldata _value, uint256 _validity) external;
 
     /**
      * @notice Revoke an attribute (ERC-1056 compatible)
@@ -296,11 +276,10 @@ interface IAxiomDID {
      * @return isValid Whether signature is from identity or valid delegate
      * @return signer The actual signer address
      */
-    function verifySignature(
-        address _identity,
-        bytes32 _hash,
-        bytes calldata _signature
-    ) external view returns (bool isValid, address signer);
+    function verifySignature(address _identity, bytes32 _hash, bytes calldata _signature)
+        external
+        view
+        returns (bool isValid, address signer);
 
     /**
      * @notice Get the current nonce for an identity (for replay protection)
@@ -319,11 +298,7 @@ interface IAxiomDID {
      * @param did The full DID string
      * @param didDocumentHash IPFS hash of DID Document
      */
-    event DIDRegistered(
-        address indexed identity,
-        string did,
-        bytes32 didDocumentHash
-    );
+    event DIDRegistered(address indexed identity, string did, bytes32 didDocumentHash);
 
     /**
      * @notice Emitted when DID attribute changes (ERC-1056 standard)
@@ -334,11 +309,7 @@ interface IAxiomDID {
      * @param previousChange Block number of previous change
      */
     event DIDAttributeChanged(
-        address indexed identity,
-        bytes32 indexed name,
-        bytes value,
-        uint256 validTo,
-        uint256 previousChange
+        address indexed identity, bytes32 indexed name, bytes value, uint256 validTo, uint256 previousChange
     );
 
     /**

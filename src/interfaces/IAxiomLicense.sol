@@ -8,7 +8,7 @@ import {AxiomTypesV2} from "../libraries/AxiomTypesV2.sol";
  * @author Axiom Protocol Team
  * @notice Interface for Programmable IP License management
  * @dev Implements ERC-721 compatible license NFTs with ERC-2981 royalty support
- *      
+ *
  *      This interface enables:
  *      - Creation of license templates attached to registered content
  *      - Purchase of licenses (minted as transferable NFTs)
@@ -22,6 +22,10 @@ import {AxiomTypesV2} from "../libraries/AxiomTypesV2.sol";
  *      - Creative Commons: https://creativecommons.org/licenses/
  */
 interface IAxiomLicense {
+    function setLicenseTreasury(address _treasury) external;
+
+    function getLicenseTreasury() external view returns (address treasury);
+
     // ═══════════════════════════════════════════════════════════════════════════
     //                          LICENSE CREATION
     // ═══════════════════════════════════════════════════════════════════════════
@@ -75,12 +79,7 @@ interface IAxiomLicense {
      * @param _validUntil New expiration
      * @param _exclusive New exclusivity setting
      */
-    function updateLicense(
-        uint256 _licenseId,
-        uint256 _price,
-        uint40 _validUntil,
-        bool _exclusive
-    ) external;
+    function updateLicense(uint256 _licenseId, uint256 _price, uint40 _validUntil, bool _exclusive) external;
 
     /**
      * @notice Deactivate a license (no new purchases allowed)
@@ -100,7 +99,7 @@ interface IAxiomLicense {
     /**
      * @notice Purchase a license (mints License NFT to buyer)
      * @dev Payment is distributed according to royalty split configuration
-     *      
+     *
      *      For ETH payment: send value with transaction
      *      For ERC-20 payment: approve tokens first, then call
      *
@@ -116,10 +115,7 @@ interface IAxiomLicense {
      * @param _duration Requested license duration in seconds (for time-limited licenses)
      * @return tokenId The minted NFT token ID representing the license
      */
-    function purchaseLicense(
-        uint256 _licenseId,
-        uint40 _duration
-    ) external payable returns (uint256 tokenId);
+    function purchaseLicense(uint256 _licenseId, uint40 _duration) external payable returns (uint256 tokenId);
 
     /**
      * @notice Purchase license on behalf of another address (gift)
@@ -130,11 +126,10 @@ interface IAxiomLicense {
      * @param _duration Requested license duration
      * @return tokenId The minted NFT token ID
      */
-    function purchaseLicenseFor(
-        uint256 _licenseId,
-        address _recipient,
-        uint40 _duration
-    ) external payable returns (uint256 tokenId);
+    function purchaseLicenseFor(uint256 _licenseId, address _recipient, uint40 _duration)
+        external
+        payable
+        returns (uint256 tokenId);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                          SUBLICENSING
@@ -156,11 +151,9 @@ interface IAxiomLicense {
      * @param _validUntil Sublicense expiration (cannot exceed parent)
      * @return sublicenseId New sublicense ID
      */
-    function createSublicense(
-        uint256 _parentTokenId,
-        uint256 _price,
-        uint40 _validUntil
-    ) external returns (uint256 sublicenseId);
+    function createSublicense(uint256 _parentTokenId, uint256 _price, uint40 _validUntil)
+        external
+        returns (uint256 sublicenseId);
 
     /**
      * @notice Purchase a sublicense
@@ -169,8 +162,7 @@ interface IAxiomLicense {
      * @param _sublicenseId Sublicense ID to purchase
      * @return tokenId Minted sublicense NFT token ID
      */
-    function purchaseSublicense(uint256 _sublicenseId) 
-        external payable returns (uint256 tokenId);
+    function purchaseSublicense(uint256 _sublicenseId) external payable returns (uint256 tokenId);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                          ROYALTY MANAGEMENT
@@ -190,11 +182,7 @@ interface IAxiomLicense {
      * @param _recipients Array of royalty recipient addresses
      * @param _shares Array of share amounts in basis points
      */
-    function setRoyaltySplit(
-        bytes32 _recordId,
-        address[] calldata _recipients,
-        uint16[] calldata _shares
-    ) external;
+    function setRoyaltySplit(bytes32 _recordId, address[] calldata _recipients, uint16[] calldata _shares) external;
 
     /**
      * @notice Claim accumulated royalties for caller
@@ -211,8 +199,7 @@ interface IAxiomLicense {
      * @param _token ERC-20 token address (0x0 for ETH)
      * @return amount Amount claimed
      */
-    function claimRoyaltiesToken(bytes32 _recordId, address _token) 
-        external returns (uint256 amount);
+    function claimRoyaltiesToken(bytes32 _recordId, address _token) external returns (uint256 amount);
 
     /**
      * @notice Get pending royalties for an address
@@ -220,8 +207,7 @@ interface IAxiomLicense {
      * @param _recordId Content record ID
      * @return pending Amount of pending royalties
      */
-    function pendingRoyalties(address _recipient, bytes32 _recordId) 
-        external view returns (uint256 pending);
+    function pendingRoyalties(address _recipient, bytes32 _recordId) external view returns (uint256 pending);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                          ERC-2981 ROYALTY INFO
@@ -238,7 +224,9 @@ interface IAxiomLicense {
      * @return royaltyAmount Amount of royalty to pay
      */
     function royaltyInfo(uint256 _tokenId, uint256 _salePrice)
-        external view returns (address receiver, uint256 royaltyAmount);
+        external
+        view
+        returns (address receiver, uint256 royaltyAmount);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                          LICENSE QUERIES
@@ -249,24 +237,21 @@ interface IAxiomLicense {
      * @param _licenseId License template ID
      * @return license Full License struct
      */
-    function getLicense(uint256 _licenseId) 
-        external view returns (AxiomTypesV2.License memory license);
+    function getLicense(uint256 _licenseId) external view returns (AxiomTypesV2.License memory license);
 
     /**
      * @notice Get all licenses for a content record
      * @param _recordId Content record ID
      * @return licenseIds Array of license IDs
      */
-    function getLicensesByRecord(bytes32 _recordId) 
-        external view returns (uint256[] memory licenseIds);
+    function getLicensesByRecord(bytes32 _recordId) external view returns (uint256[] memory licenseIds);
 
     /**
      * @notice Get all licenses owned by an address
      * @param _owner Address to query
      * @return tokenIds Array of owned license NFT token IDs
      */
-    function getLicensesByOwner(address _owner) 
-        external view returns (uint256[] memory tokenIds);
+    function getLicensesByOwner(address _owner) external view returns (uint256[] memory tokenIds);
 
     /**
      * @notice Check if an address has a valid license for content
@@ -277,8 +262,10 @@ interface IAxiomLicense {
      * @return isValid Whether licensee has valid (non-expired) license
      * @return licenseType The type of license held
      */
-    function hasValidLicense(address _licensee, bytes32 _recordId) 
-        external view returns (bool isValid, AxiomTypesV2.LicenseType licenseType);
+    function hasValidLicense(address _licensee, bytes32 _recordId)
+        external
+        view
+        returns (bool isValid, AxiomTypesV2.LicenseType licenseType);
 
     /**
      * @notice Check if a specific license NFT is still valid
@@ -292,8 +279,7 @@ interface IAxiomLicense {
      * @param _recordId Content record ID
      * @return split RoyaltySplit struct with recipients and shares
      */
-    function getRoyaltySplit(bytes32 _recordId) 
-        external view returns (AxiomTypesV2.RoyaltySplit memory split);
+    function getRoyaltySplit(bytes32 _recordId) external view returns (AxiomTypesV2.RoyaltySplit memory split);
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                          TERRITORY MANAGEMENT
@@ -313,10 +299,7 @@ interface IAxiomLicense {
      * @param _licenseId License ID to update
      * @param _restrictionsURI IPFS URI to restrictions JSON
      */
-    function setTerritoryRestrictions(
-        uint256 _licenseId,
-        string calldata _restrictionsURI
-    ) external;
+    function setTerritoryRestrictions(uint256 _licenseId, string calldata _restrictionsURI) external;
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                              EVENTS
@@ -346,10 +329,7 @@ interface IAxiomLicense {
      * @param pricePaid Amount paid
      */
     event LicensePurchased(
-        uint256 indexed licenseId,
-        uint256 indexed tokenId,
-        address indexed licensee,
-        uint256 pricePaid
+        uint256 indexed licenseId, uint256 indexed tokenId, address indexed licensee, uint256 pricePaid
     );
 
     /**
@@ -358,11 +338,7 @@ interface IAxiomLicense {
      * @param parentTokenId Parent license NFT token ID
      * @param sublicensor Address creating the sublicense
      */
-    event SublicenseCreated(
-        uint256 indexed sublicenseId,
-        uint256 indexed parentTokenId,
-        address indexed sublicensor
-    );
+    event SublicenseCreated(uint256 indexed sublicenseId, uint256 indexed parentTokenId, address indexed sublicensor);
 
     /**
      * @notice Emitted when royalties are distributed
@@ -371,12 +347,7 @@ interface IAxiomLicense {
      * @param amount Amount distributed
      * @param token Payment token (0x0 for ETH)
      */
-    event RoyaltyDistributed(
-        bytes32 indexed recordId,
-        address indexed recipient,
-        uint256 amount,
-        address token
-    );
+    event RoyaltyDistributed(bytes32 indexed recordId, address indexed recipient, uint256 amount, address token);
 
     /**
      * @notice Emitted when royalty split is updated
@@ -384,19 +355,12 @@ interface IAxiomLicense {
      * @param recipients Array of recipient addresses
      * @param shares Array of share amounts
      */
-    event RoyaltySplitUpdated(
-        bytes32 indexed recordId,
-        address[] recipients,
-        uint16[] shares
-    );
+    event RoyaltySplitUpdated(bytes32 indexed recordId, address[] recipients, uint16[] shares);
 
     /**
      * @notice Emitted when license is deactivated
      * @param licenseId License ID
      * @param licensor Address that deactivated
      */
-    event LicenseDeactivated(
-        uint256 indexed licenseId,
-        address indexed licensor
-    );
+    event LicenseDeactivated(uint256 indexed licenseId, address indexed licensor);
 }

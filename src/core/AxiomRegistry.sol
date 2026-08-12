@@ -11,7 +11,7 @@ import {IAxiomRegistry} from "../interfaces/IAxiomRegistry.sol";
  * @notice Diamond Facet for content hash registration and verification
  * @dev V3: Converted to stateless facet. Executes via delegatecall from AxiomRouter.
  *      All state accessed through AxiomStorage diamond pattern.
- *      
+ *
  *      CRITICAL: This contract is deployed standalone but NEVER called directly.
  *      All calls go through AxiomRouter proxy via delegatecall, which means:
  *      - msg.sender = original caller (preserved across delegatecall)
@@ -49,12 +49,13 @@ contract AxiomRegistry is IAxiomRegistry {
      */
     modifier rateLimit() {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         // Enterprise users bypass rate limit
         if (!s.isEnterprise[msg.sender]) {
+            require(s.rateLimitWindow != 0, "AxiomRegistry: rate limit not configured");
             uint256 currentWindow = block.timestamp / s.rateLimitWindow;
             uint256 lastWindow = s.lastActionTime[msg.sender] / s.rateLimitWindow;
-            
+
             if (currentWindow == lastWindow) {
                 if (s.actionCount[msg.sender] >= s.maxActionsPerWindow) {
                     revert AxiomTypes.RateLimitExceeded(msg.sender);
@@ -74,9 +75,11 @@ contract AxiomRegistry is IAxiomRegistry {
      *         since facets can be called in sequence
      */
     modifier nonReentrant() {
-        // In a full implementation, this would use a separate reentrancy slot
-        // For now, relying on Router's ReentrancyGuardUpgradeable
+        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
+        require(s.reentrancyStatus != 2, "ReentrancyGuard: reentrant call");
+        s.reentrancyStatus = 2;
         _;
+        s.reentrancyStatus = 1;
     }
 
     // ============ External Functions ============
@@ -84,26 +87,33 @@ contract AxiomRegistry is IAxiomRegistry {
     /**
      * @inheritdoc IAxiomRegistry
      */
-    function register(
-        bytes32 _contentHash,
-        string calldata _metadataURI
-    ) external payable override nonReentrant notBanned whenNotPaused rateLimit returns (bytes32 recordId) {
+    function register(bytes32 _contentHash, string calldata _metadataURI)
+        external
+        payable
+        override
+        nonReentrant
+        notBanned
+        whenNotPaused
+        rateLimit
+        returns (bytes32 recordId)
+    {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+        require(_contentHash != bytes32(0), "AxiomRegistry: zero content hash");
+
         // Generate unique record ID (includes sender to prevent front-running)
         recordId = AxiomStorage.generateRecordId(_contentHash, msg.sender);
-        
+
         // Check for duplicates
         if (AxiomStorage.recordExists(recordId)) {
             revert AxiomTypes.ContentAlreadyExists(recordId);
         }
-        
+
         // Check fee
         uint256 requiredFee = _getFee(msg.sender);
         if (msg.value < requiredFee) {
             revert AxiomTypes.InsufficientFee(msg.value, requiredFee);
         }
-        
+
         // Create and store record
         s.records[recordId] = AxiomTypes.AxiomRecord({
             issuer: msg.sender,
@@ -113,69 +123,91 @@ contract AxiomRegistry is IAxiomRegistry {
             contentHash: _contentHash,
             metadataURI: _metadataURI
         });
-        
+
         // Update tracking
         s.userRecords[msg.sender].push(recordId);
+        s.allRecordIds.push(recordId);
         s.hashExists[recordId] = true;
         s.totalRecords++;
-        s.totalFeesCollected += msg.value;
-        
+        s.totalFeesCollected += requiredFee;
+
         // Emit events
-        emit AxiomTypes.ContentRegistered(
-            recordId,
-            msg.sender,
-            _contentHash,
-            uint40(block.timestamp),
-            _metadataURI
-        );
-        
-        emit AxiomTypes.FeeCollected(msg.sender, msg.value, recordId);
-        
+        emit AxiomTypes.ContentRegistered(recordId, msg.sender, _contentHash, uint40(block.timestamp), _metadataURI);
+
+        emit AxiomTypes.FeeCollected(msg.sender, requiredFee, recordId);
+
         // Refund excess
         if (msg.value > requiredFee) {
             (bool success,) = payable(msg.sender).call{value: msg.value - requiredFee}("");
             require(success, "Refund failed");
         }
-        
+
         return recordId;
     }
 
     /**
      * @inheritdoc IAxiomRegistry
      */
-    function batchRegister(
-        bytes32[] calldata _contentHashes,
-        string[] calldata _metadataURIs
-    ) external payable override nonReentrant notBanned whenNotPaused returns (bytes32[] memory recordIds) {
+    function batchRegister(bytes32[] calldata _contentHashes, string[] calldata _metadataURIs)
+        external
+        payable
+        override
+        nonReentrant
+        notBanned
+        whenNotPaused
+        rateLimit
+        returns (bytes32[] memory recordIds)
+    {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         // Validate input
         if (_contentHashes.length != _metadataURIs.length) {
             revert AxiomTypes.ArrayLengthMismatch();
         }
-        
+        if (_contentHashes.length == 0) {
+            revert AxiomTypes.ArrayLengthMismatch();
+        }
+
         if (_contentHashes.length > s.maxBatchSize) {
             revert AxiomTypes.BatchSizeExceeded(_contentHashes.length, s.maxBatchSize);
         }
-        
-        // Calculate total fee
+
+        // Calculate the fee only for records that will actually be accepted.
+        // Existing records and duplicates within this batch retain a zero return ID.
         uint256 feePerItem = _getFee(msg.sender);
-        uint256 totalFee = feePerItem * _contentHashes.length;
-        
+        bytes32[] memory candidateIds = new bytes32[](_contentHashes.length);
+        uint256 acceptedCount;
+        for (uint256 i = 0; i < _contentHashes.length; i++) {
+            require(_contentHashes[i] != bytes32(0), "AxiomRegistry: zero content hash");
+            bytes32 candidateId = AxiomStorage.generateRecordId(_contentHashes[i], msg.sender);
+            candidateIds[i] = candidateId;
+            if (AxiomStorage.recordExists(candidateId)) continue;
+
+            bool repeatedInBatch;
+            for (uint256 j = 0; j < i; j++) {
+                if (candidateIds[j] == candidateId) {
+                    repeatedInBatch = true;
+                    break;
+                }
+            }
+            if (!repeatedInBatch) acceptedCount++;
+        }
+        uint256 totalFee = feePerItem * acceptedCount;
+
         if (msg.value < totalFee) {
             revert AxiomTypes.InsufficientFee(msg.value, totalFee);
         }
-        
+
         recordIds = new bytes32[](_contentHashes.length);
-        
+
         for (uint256 i = 0; i < _contentHashes.length; i++) {
-            bytes32 recordId = AxiomStorage.generateRecordId(_contentHashes[i], msg.sender);
-            
+            bytes32 recordId = candidateIds[i];
+
             // Skip if already exists (don't revert entire batch)
             if (AxiomStorage.recordExists(recordId)) {
                 continue;
             }
-            
+
             s.records[recordId] = AxiomTypes.AxiomRecord({
                 issuer: msg.sender,
                 timestamp: uint40(block.timestamp),
@@ -184,59 +216,60 @@ contract AxiomRegistry is IAxiomRegistry {
                 contentHash: _contentHashes[i],
                 metadataURI: _metadataURIs[i]
             });
-            
+
             s.userRecords[msg.sender].push(recordId);
+            s.allRecordIds.push(recordId);
             s.hashExists[recordId] = true;
             s.totalRecords++;
             recordIds[i] = recordId;
-            
+
             emit AxiomTypes.ContentRegistered(
-                recordId,
-                msg.sender,
-                _contentHashes[i],
-                uint40(block.timestamp),
-                _metadataURIs[i]
+                recordId, msg.sender, _contentHashes[i], uint40(block.timestamp), _metadataURIs[i]
             );
         }
-        
-        s.totalFeesCollected += msg.value;
-        emit AxiomTypes.FeeCollected(msg.sender, msg.value, bytes32(0));
-        
+
+        s.totalFeesCollected += totalFee;
+        emit AxiomTypes.FeeCollected(msg.sender, totalFee, bytes32(0));
+
         // Refund excess
         if (msg.value > totalFee) {
             (bool success,) = payable(msg.sender).call{value: msg.value - totalFee}("");
             require(success, "Refund failed");
         }
-        
+
         return recordIds;
     }
 
     /**
      * @inheritdoc IAxiomRegistry
      */
-    function revoke(bytes32 _recordId, string calldata _reason) external override {
+    function revoke(bytes32 _recordId, string calldata _reason) external override whenNotPaused {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         // Check record exists
         if (!AxiomStorage.recordExists(_recordId)) {
             revert AxiomTypes.ContentNotFound(_recordId);
         }
-        
+
         AxiomTypes.AxiomRecord storage record = s.records[_recordId];
-        
+
         // Only issuer can revoke
         if (record.issuer != msg.sender) {
             revert AxiomTypes.NotIssuer(msg.sender, record.issuer);
         }
-        
-        // Check not already revoked
-        if (record.status == AxiomTypes.ContentStatus.REVOKED) {
-            revert AxiomTypes.ContentAlreadyRevoked(_recordId);
+
+        // Only active content can enter the terminal issuer-revoked state.
+        // A disputed record must first complete its dispute lifecycle.
+        if (record.status != AxiomTypes.ContentStatus.ACTIVE) {
+            if (record.status == AxiomTypes.ContentStatus.REVOKED) {
+                revert AxiomTypes.ContentAlreadyRevoked(_recordId);
+            }
+            revert("AxiomRegistry: disputed record");
         }
-        
+
         // Update status
         record.status = AxiomTypes.ContentStatus.REVOKED;
-        
+
         emit AxiomTypes.ContentRevoked(_recordId, msg.sender, _reason);
     }
 
@@ -245,35 +278,35 @@ contract AxiomRegistry is IAxiomRegistry {
     /**
      * @inheritdoc IAxiomRegistry
      */
-    function verify(
-        bytes32 _contentHash,
-        address _claimedIssuer
-    ) external view override returns (bool isValid, AxiomTypes.AxiomRecord memory record) {
+    function verify(bytes32 _contentHash, address _claimedIssuer)
+        external
+        view
+        override
+        returns (bool isValid, AxiomTypes.AxiomRecord memory record)
+    {
         bytes32 recordId = AxiomStorage.generateRecordId(_contentHash, _claimedIssuer);
-        
+
         if (!AxiomStorage.recordExists(recordId)) {
             return (false, record);
         }
-        
+
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         record = s.records[recordId];
-        
+
         // Content is valid only if status is ACTIVE
         isValid = (record.status == AxiomTypes.ContentStatus.ACTIVE);
-        
+
         return (isValid, record);
     }
 
     /**
      * @inheritdoc IAxiomRegistry
      */
-    function getRecord(bytes32 _recordId) 
-        external view override returns (AxiomTypes.AxiomRecord memory record) 
-    {
+    function getRecord(bytes32 _recordId) external view override returns (AxiomTypes.AxiomRecord memory record) {
         if (!AxiomStorage.recordExists(_recordId)) {
             revert AxiomTypes.ContentNotFound(_recordId);
         }
-        
+
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         return s.records[_recordId];
     }
@@ -281,9 +314,7 @@ contract AxiomRegistry is IAxiomRegistry {
     /**
      * @inheritdoc IAxiomRegistry
      */
-    function getRecordsByIssuer(address _issuer) 
-        external view override returns (bytes32[] memory recordIds) 
-    {
+    function getRecordsByIssuer(address _issuer) external view override returns (bytes32[] memory recordIds) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
         return s.userRecords[_issuer];
     }
@@ -296,6 +327,27 @@ contract AxiomRegistry is IAxiomRegistry {
         return s.totalRecords;
     }
 
+    /**
+     * @inheritdoc IAxiomRegistry
+     */
+    function getRecordIds(uint256 _offset, uint256 _limit) external view override returns (bytes32[] memory recordIds) {
+        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
+        uint256 length = s.allRecordIds.length;
+        if (_offset >= length || _limit == 0) {
+            return new bytes32[](0);
+        }
+
+        uint256 end = _offset + _limit;
+        if (end > length || end < _offset) {
+            end = length;
+        }
+
+        recordIds = new bytes32[](end - _offset);
+        for (uint256 i = _offset; i < end; i++) {
+            recordIds[i - _offset] = s.allRecordIds[i];
+        }
+    }
+
     // ============ Internal Functions ============
 
     /**
@@ -303,11 +355,11 @@ contract AxiomRegistry is IAxiomRegistry {
      */
     function _getFee(address _user) internal view returns (uint256) {
         AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        
+
         if (s.isEnterprise[_user] && s.enterpriseRates[_user] > 0) {
             return s.enterpriseRates[_user];
         }
-        
+
         return s.baseFee;
     }
 }

@@ -14,10 +14,7 @@ interface IAxiomRegistry {
      * @param _metadataURI IPFS/Arweave link to metadata JSON
      * @return recordId Unique identifier for the registered record
      */
-    function register(
-        bytes32 _contentHash,
-        string calldata _metadataURI
-    ) external payable returns (bytes32 recordId);
+    function register(bytes32 _contentHash, string calldata _metadataURI) external payable returns (bytes32 recordId);
 
     /**
      * @notice Register multiple content hashes in a single transaction
@@ -25,10 +22,10 @@ interface IAxiomRegistry {
      * @param _metadataURIs Array of metadata URIs
      * @return recordIds Array of generated record IDs
      */
-    function batchRegister(
-        bytes32[] calldata _contentHashes,
-        string[] calldata _metadataURIs
-    ) external payable returns (bytes32[] memory recordIds);
+    function batchRegister(bytes32[] calldata _contentHashes, string[] calldata _metadataURIs)
+        external
+        payable
+        returns (bytes32[] memory recordIds);
 
     /**
      * @notice Revoke a previously registered content
@@ -44,30 +41,35 @@ interface IAxiomRegistry {
      * @return isValid Whether the content is valid
      * @return record The full record data
      */
-    function verify(
-        bytes32 _contentHash,
-        address _claimedIssuer
-    ) external view returns (bool isValid, AxiomTypes.AxiomRecord memory record);
+    function verify(bytes32 _contentHash, address _claimedIssuer)
+        external
+        view
+        returns (bool isValid, AxiomTypes.AxiomRecord memory record);
 
     /**
      * @notice Get record by ID
      * @param _recordId The record ID
      * @return record The record data
      */
-    function getRecord(bytes32 _recordId) 
-        external view returns (AxiomTypes.AxiomRecord memory record);
+    function getRecord(bytes32 _recordId) external view returns (AxiomTypes.AxiomRecord memory record);
 
     /**
      * @notice Get all records by issuer
      * @param _issuer The issuer address
      * @return recordIds Array of record IDs
      */
-    function getRecordsByIssuer(address _issuer) 
-        external view returns (bytes32[] memory recordIds);
+    function getRecordsByIssuer(address _issuer) external view returns (bytes32[] memory recordIds);
 
     /**
      * @notice Get total number of records
      * @return count Total record count
      */
     function getTotalRecords() external view returns (uint256 count);
+
+    /**
+     * @notice Get a page of globally registered record IDs
+     * @param _offset Index of the first record to return
+     * @param _limit Maximum number of record IDs to return
+     */
+    function getRecordIds(uint256 _offset, uint256 _limit) external view returns (bytes32[] memory recordIds);
 }

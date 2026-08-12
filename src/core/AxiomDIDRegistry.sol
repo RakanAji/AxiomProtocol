@@ -7,13 +7,14 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 
 import {IAxiomDID} from "../interfaces/IAxiomDID.sol";
 import {AxiomTypesV2} from "../libraries/AxiomTypesV2.sol";
+import {AxiomStorage} from "../storage/AxiomStorage.sol";
 
 /**
  * @title AxiomDIDRegistry
  * @author Axiom Protocol Team
  * @notice Diamond Facet for Decentralized Identifier (DID) management
  * @dev V3: Converted to stateless facet. Executes via delegatecall from AxiomRouter.
- *      
+ *
  *      W3C DID Core and ERC-1056 standards compliance:
  *      - DID registration and resolution
  *      - Delegate authorization for signing
@@ -22,7 +23,7 @@ import {AxiomTypesV2} from "../libraries/AxiomTypesV2.sol";
  *
  *      Storage Pattern: Uses Diamond Storage with separate DID_STORAGE_SLOT
  *      (does not collide with AXIOM_STORAGE_POSITION)
- *      
+ *
  *      Access Control: Checks Router's AccessControl via delegatecall context
  *      (VERIFIER_ROLE is stored in Router's AccessControlUpgradeable storage)
  */
@@ -36,16 +37,16 @@ contract AxiomDIDRegistry is IAxiomDID {
 
     /// @notice Role for identity verifiers (KYC/KYB providers)
     bytes32 public constant VERIFIER_ROLE = keccak256("VERIFIER_ROLE");
-    
+
     /// @notice Role for contract upgraders (defined in Router)
     bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
 
     /// @notice Standard delegate type for signature authorization
     bytes32 public constant DELEGATE_TYPE_SIG_AUTH = keccak256("sigAuth");
-    
+
     /// @notice Standard delegate type for verification keys
     bytes32 public constant DELEGATE_TYPE_VERI_KEY = keccak256("veriKey");
-    
+
     /// @notice Delegate type for Axiom content registration
     bytes32 public constant DELEGATE_TYPE_AXIOM_REG = keccak256("axiomReg");
 
@@ -59,33 +60,36 @@ contract AxiomDIDRegistry is IAxiomDID {
     struct DIDStorage {
         /// @notice Maps address to DID identity
         mapping(address => AxiomTypesV2.DIDIdentity) identities;
-        
+
         /// @notice Maps DID string hash to owner address (reverse lookup)
         mapping(bytes32 => address) didToOwner;
-        
+
         /// @notice Maps identity => delegateType => delegate => validity timestamp
         mapping(address => mapping(bytes32 => mapping(address => uint256))) delegates;
-        
+
         /// @notice Maps identity => delegate list for enumeration
         mapping(address => address[]) delegateList;
-        
+
         /// @notice Maps identity => delegateType => delegate => active status
         mapping(address => mapping(bytes32 => mapping(address => bool))) delegateActive;
-        
+
         /// @notice Maps identity => attribute name => value (ERC-1056)
         mapping(address => mapping(bytes32 => bytes)) attributes;
-        
+
         /// @notice Maps identity => attribute name => validity timestamp
         mapping(address => mapping(bytes32 => uint256)) attributeValidity;
-        
+
         /// @notice Block of last change per identity (ERC-1056 compat)
         mapping(address => uint256) changed;
-        
+
         /// @notice Nonce per identity for replay protection
         mapping(address => uint256) nonces;
-        
+
         /// @notice Total registered DIDs
         uint256 totalDIDs;
+
+        /// @notice Whether an address has ever been added to an identity's delegate list
+        mapping(address => mapping(address => bool)) delegateListed;
     }
 
     function _getDIDStorage() internal pure returns (DIDStorage storage s) {
@@ -119,6 +123,18 @@ contract AxiomDIDRegistry is IAxiomDID {
         _;
     }
 
+    modifier whenNotPaused() {
+        require(!AxiomStorage.getStorage().paused, "Protocol is paused");
+        _;
+    }
+
+    modifier notBanned() {
+        if (AxiomStorage.getStorage().bannedAddresses[msg.sender]) {
+            revert AxiomTypesV2.OperationNotPermitted();
+        }
+        _;
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     //                          DID REGISTRATION
     // ═══════════════════════════════════════════════════════════════════════════
@@ -130,13 +146,14 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _didDocumentHash IPFS hash (CID) of the DID Document.
      * @param _publicKeyJwk Public key in JWK format for signature verification.
      */
-    function registerDID(
-        string calldata _did,
-        bytes32 _didDocumentHash,
-        string calldata _publicKeyJwk
-    ) external override {
+    function registerDID(string calldata _did, bytes32 _didDocumentHash, string calldata _publicKeyJwk)
+        external
+        override
+        whenNotPaused
+        notBanned
+    {
         DIDStorage storage s = _getDIDStorage();
-        
+
         // Validation
         if (bytes(s.identities[msg.sender].did).length > 0) {
             revert AxiomTypesV2.DIDAlreadyExists(msg.sender);
@@ -145,6 +162,9 @@ contract AxiomDIDRegistry is IAxiomDID {
             revert AxiomTypesV2.OperationNotPermitted();
         }
         if (_didDocumentHash == bytes32(0)) {
+            revert AxiomTypesV2.OperationNotPermitted();
+        }
+        if (bytes(_publicKeyJwk).length == 0) {
             revert AxiomTypesV2.OperationNotPermitted();
         }
 
@@ -177,11 +197,11 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @dev Only the identity owner can update their DID Document. DID must be active.
      * @param _newDocumentHash The new IPFS hash of the updated DID Document.
      */
-    function updateDIDDocument(bytes32 _newDocumentHash) external override {
+    function updateDIDDocument(bytes32 _newDocumentHash) external override whenNotPaused {
         DIDStorage storage s = _getDIDStorage();
-        
+
         _requireActiveDID(msg.sender);
-        
+
         if (_newDocumentHash == bytes32(0)) {
             revert AxiomTypesV2.OperationNotPermitted();
         }
@@ -203,9 +223,9 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @dev Stores the endpoint URL in the registry. Emits DIDAttributeChanged.
      * @param _serviceEndpoint The URL of the service endpoint.
      */
-    function setServiceEndpoint(string calldata _serviceEndpoint) external override {
+    function setServiceEndpoint(string calldata _serviceEndpoint) external override whenNotPaused {
         DIDStorage storage s = _getDIDStorage();
-        
+
         _requireActiveDID(msg.sender);
 
         s.identities[msg.sender].serviceEndpoint = _serviceEndpoint;
@@ -213,11 +233,7 @@ contract AxiomDIDRegistry is IAxiomDID {
         s.changed[msg.sender] = block.number;
 
         emit DIDAttributeChanged(
-            msg.sender,
-            keccak256("did/svc/endpoint"),
-            bytes(_serviceEndpoint),
-            type(uint256).max,
-            previousChange
+            msg.sender, keccak256("did/svc/endpoint"), bytes(_serviceEndpoint), type(uint256).max, previousChange
         );
     }
 
@@ -225,9 +241,9 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @notice Revokes (deactivates) the caller's DID permanently.
      * @dev This action is irreversible. The DID cannot be re-activated.
      */
-    function revokeDID() external override {
+    function revokeDID() external override whenNotPaused {
         DIDStorage storage s = _getDIDStorage();
-        
+
         _requireActiveDID(msg.sender);
 
         s.identities[msg.sender].isActive = false;
@@ -235,11 +251,7 @@ contract AxiomDIDRegistry is IAxiomDID {
         s.changed[msg.sender] = block.number;
 
         emit DIDAttributeChanged(
-            msg.sender,
-            keccak256("did/revoked"),
-            abi.encode(true),
-            block.timestamp,
-            previousChange
+            msg.sender, keccak256("did/revoked"), abi.encode(true), block.timestamp, previousChange
         );
     }
 
@@ -254,42 +266,40 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _delegateType The type of delegation (keccak256 hash of type string).
      * @param _validity The duration in seconds for which the delegation is valid.
      */
-    function addDelegate(
-        address _delegate,
-        bytes32 _delegateType,
-        uint256 _validity
-    ) external override {
+    function addDelegate(address _delegate, bytes32 _delegateType, uint256 _validity) external override whenNotPaused {
         DIDStorage storage s = _getDIDStorage();
-        
+
         _requireActiveDID(msg.sender);
-        
+
         if (_delegate == address(0)) {
             revert AxiomTypesV2.ZeroAddress();
         }
         if (_validity == 0) {
             revert AxiomTypesV2.OperationNotPermitted();
         }
+        if (
+            _delegateType != DELEGATE_TYPE_SIG_AUTH && _delegateType != DELEGATE_TYPE_VERI_KEY
+                && _delegateType != DELEGATE_TYPE_AXIOM_REG
+        ) {
+            revert AxiomTypesV2.OperationNotPermitted();
+        }
 
         uint256 validTo = block.timestamp + _validity;
-        
+        if (validTo > type(uint40).max) revert AxiomTypesV2.OperationNotPermitted();
+
         // Add to delegate list if new
-        if (!s.delegateActive[msg.sender][_delegateType][_delegate]) {
+        if (!s.delegateListed[msg.sender][_delegate]) {
             s.delegateList[msg.sender].push(_delegate);
+            s.delegateListed[msg.sender][_delegate] = true;
         }
-        
+
         s.delegates[msg.sender][_delegateType][_delegate] = validTo;
         s.delegateActive[msg.sender][_delegateType][_delegate] = true;
-        
+
         uint256 previousChange = s.changed[msg.sender];
         s.changed[msg.sender] = block.number;
 
-        emit DIDDelegateChanged(
-            msg.sender,
-            _delegateType,
-            _delegate,
-            validTo,
-            previousChange
-        );
+        emit DIDDelegateChanged(msg.sender, _delegateType, _delegate, validTo, previousChange);
     }
 
     /**
@@ -298,18 +308,18 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _delegate The address of the delegate to revoke.
      * @param _delegateType The type of delegation being revoked.
      */
-    function revokeDelegate(address _delegate, bytes32 _delegateType) external override {
+    function revokeDelegate(address _delegate, bytes32 _delegateType) external override whenNotPaused {
         DIDStorage storage s = _getDIDStorage();
-        
+
         _requireActiveDID(msg.sender);
-        
+
         if (!s.delegateActive[msg.sender][_delegateType][_delegate]) {
             revert AxiomTypesV2.UnauthorizedDelegate(msg.sender, _delegate);
         }
 
         s.delegates[msg.sender][_delegateType][_delegate] = 0;
         s.delegateActive[msg.sender][_delegateType][_delegate] = false;
-        
+
         uint256 previousChange = s.changed[msg.sender];
         s.changed[msg.sender] = block.number;
 
@@ -329,19 +339,23 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _delegate The address of the potential delegate.
      * @return isValid True if the delegate is active and the validity period has not expired.
      */
-    function validDelegate(
-        address _identity,
-        bytes32 _delegateType,
-        address _delegate
-    ) external view override returns (bool isValid) {
+    function validDelegate(address _identity, bytes32 _delegateType, address _delegate)
+        external
+        view
+        override
+        returns (bool isValid)
+    {
         DIDStorage storage s = _getDIDStorage();
-        
+
         if (!s.identities[_identity].isActive) {
             return false;
         }
-        
-        uint256 validTo = s.delegates[_identity][_delegateType][_delegate];
-        return validTo > block.timestamp;
+
+        // Keep this public query identical to the predicate used by
+        // signature authorization: a delegate is invalid after the DID
+        // itself expires or is revoked, even if the delegate's own timestamp
+        // has not elapsed yet.
+        return _isDelegateActive(s, _identity, _delegateType, _delegate);
     }
 
     /**
@@ -349,34 +363,32 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _identity The identity address.
      * @return delegates An array of DIDDelegate structs representing active delegates.
      */
-    function getDelegates(address _identity) 
-        external view override 
-        returns (AxiomTypesV2.DIDDelegate[] memory delegates) 
+    function getDelegates(address _identity)
+        external
+        view
+        override
+        returns (AxiomTypesV2.DIDDelegate[] memory delegates)
     {
         DIDStorage storage s = _getDIDStorage();
-        
+
         address[] memory delegateAddrs = s.delegateList[_identity];
         uint256 count = 0;
-        
-        // Count active delegates
+
+        bytes32[3] memory types = [DELEGATE_TYPE_SIG_AUTH, DELEGATE_TYPE_VERI_KEY, DELEGATE_TYPE_AXIOM_REG];
+
+        // Count every active (address, delegateType) authorization.
         for (uint256 i = 0; i < delegateAddrs.length; i++) {
-            // Check common delegate types
-            if (_isDelegateActive(s, _identity, DELEGATE_TYPE_SIG_AUTH, delegateAddrs[i]) ||
-                _isDelegateActive(s, _identity, DELEGATE_TYPE_VERI_KEY, delegateAddrs[i]) ||
-                _isDelegateActive(s, _identity, DELEGATE_TYPE_AXIOM_REG, delegateAddrs[i])) {
-                count++;
+            for (uint256 t = 0; t < types.length; t++) {
+                if (_isDelegateActive(s, _identity, types[t], delegateAddrs[i])) count++;
             }
         }
-        
+
         delegates = new AxiomTypesV2.DIDDelegate[](count);
         uint256 idx = 0;
-        
+
         for (uint256 i = 0; i < delegateAddrs.length && idx < count; i++) {
             address del = delegateAddrs[i];
-            
-            // Check each delegate type
-            bytes32[3] memory types = [DELEGATE_TYPE_SIG_AUTH, DELEGATE_TYPE_VERI_KEY, DELEGATE_TYPE_AXIOM_REG];
-            
+
             for (uint256 t = 0; t < types.length; t++) {
                 if (_isDelegateActive(s, _identity, types[t], del)) {
                     delegates[idx] = AxiomTypesV2.DIDDelegate({
@@ -386,20 +398,20 @@ contract AxiomDIDRegistry is IAxiomDID {
                         isActive: true
                     });
                     idx++;
-                    break; // Only add once per delegate
                 }
             }
         }
     }
 
-    function _isDelegateActive(
-        DIDStorage storage s,
-        address _identity,
-        bytes32 _delegateType,
-        address _delegate
-    ) internal view returns (bool) {
-        return s.delegateActive[_identity][_delegateType][_delegate] &&
-               s.delegates[_identity][_delegateType][_delegate] > block.timestamp;
+    function _isDelegateActive(DIDStorage storage s, address _identity, bytes32 _delegateType, address _delegate)
+        internal
+        view
+        returns (bool)
+    {
+        AxiomTypesV2.DIDIdentity storage identity = s.identities[_identity];
+        return identity.isActive && (identity.validUntil == 0 || identity.validUntil > block.timestamp)
+            && s.delegateActive[_identity][_delegateType][_delegate]
+            && s.delegates[_identity][_delegateType][_delegate] > block.timestamp;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -412,12 +424,14 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _user The address of the identity to verify.
      * @param _level The new verification level to assign.
      */
-    function setVerificationLevel(
-        address _user,
-        AxiomTypesV2.VerificationLevel _level
-    ) external override onlyRole(VERIFIER_ROLE) {
+    function setVerificationLevel(address _user, AxiomTypesV2.VerificationLevel _level)
+        external
+        override
+        onlyRole(VERIFIER_ROLE)
+        whenNotPaused
+    {
         DIDStorage storage s = _getDIDStorage();
-        
+
         _requireActiveDID(_user);
 
         AxiomTypesV2.VerificationLevel oldLevel = s.identities[_user].level;
@@ -431,10 +445,7 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _user The address to check.
      * @return level The current verification level.
      */
-    function getVerificationLevel(address _user) 
-        external view override 
-        returns (AxiomTypesV2.VerificationLevel level) 
-    {
+    function getVerificationLevel(address _user) external view override returns (AxiomTypesV2.VerificationLevel level) {
         DIDStorage storage s = _getDIDStorage();
         return s.identities[_user].level;
     }
@@ -445,16 +456,18 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _minLevel The minimum required verification level.
      * @return meetsRequirement True if the identity's level is greater than or equal to _minLevel.
      */
-    function meetsVerificationLevel(
-        address _user,
-        AxiomTypesV2.VerificationLevel _minLevel
-    ) external view override returns (bool meetsRequirement) {
+    function meetsVerificationLevel(address _user, AxiomTypesV2.VerificationLevel _minLevel)
+        external
+        view
+        override
+        returns (bool meetsRequirement)
+    {
         DIDStorage storage s = _getDIDStorage();
-        
+
         if (!s.identities[_user].isActive) {
             return false;
         }
-        
+
         return uint8(s.identities[_user].level) >= uint8(_minLevel);
     }
 
@@ -467,19 +480,21 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _did The DID string to resolve.
      * @return identity The full DIDIdentity struct.
      */
-    function resolveDID(string calldata _did) 
-        external view override 
-        returns (AxiomTypesV2.DIDIdentity memory identity) 
+    function resolveDID(string calldata _did)
+        external
+        view
+        override
+        returns (AxiomTypesV2.DIDIdentity memory identity)
     {
         DIDStorage storage s = _getDIDStorage();
-        
+
         bytes32 didHash = keccak256(bytes(_did));
         address owner = s.didToOwner[didHash];
-        
+
         if (owner == address(0)) {
             return identity; // Empty struct
         }
-        
+
         return s.identities[owner];
     }
 
@@ -488,10 +503,7 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _user The wallet address to look up.
      * @return identity The full DIDIdentity struct.
      */
-    function getIdentity(address _user) 
-        external view override 
-        returns (AxiomTypesV2.DIDIdentity memory identity) 
-    {
+    function getIdentity(address _user) external view override returns (AxiomTypesV2.DIDIdentity memory identity) {
         DIDStorage storage s = _getDIDStorage();
         return s.identities[_user];
     }
@@ -513,22 +525,22 @@ contract AxiomDIDRegistry is IAxiomDID {
      */
     function isDIDActive(address _user) external view override returns (bool active) {
         DIDStorage storage s = _getDIDStorage();
-        
+
         AxiomTypesV2.DIDIdentity storage identity = s.identities[_user];
-        
+
         if (bytes(identity.did).length == 0) {
             return false;
         }
-        
+
         if (!identity.isActive) {
             return false;
         }
-        
+
         // Check expiry if set
-        if (identity.validUntil > 0 && identity.validUntil < block.timestamp) {
+        if (identity.validUntil > 0 && identity.validUntil <= block.timestamp) {
             return false;
         }
-        
+
         return true;
     }
 
@@ -537,10 +549,7 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _user The address to look up.
      * @return did The DID string.
      */
-    function getDIDString(address _user) 
-        external view override 
-        returns (string memory did) 
-    {
+    function getDIDString(address _user) external view override returns (string memory did) {
         DIDStorage storage s = _getDIDStorage();
         return s.identities[_user].did;
     }
@@ -556,30 +565,20 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _value The attribute value.
      * @param _validity The duration in seconds for which the attribute is valid.
      */
-    function setAttribute(
-        bytes32 _name,
-        bytes calldata _value,
-        uint256 _validity
-    ) external override {
+    function setAttribute(bytes32 _name, bytes calldata _value, uint256 _validity) external override whenNotPaused {
         DIDStorage storage s = _getDIDStorage();
-        
+
         _requireActiveDID(msg.sender);
 
         uint256 validTo = block.timestamp + _validity;
-        
+
         s.attributes[msg.sender][_name] = _value;
         s.attributeValidity[msg.sender][_name] = validTo;
-        
+
         uint256 previousChange = s.changed[msg.sender];
         s.changed[msg.sender] = block.number;
 
-        emit DIDAttributeChanged(
-            msg.sender,
-            _name,
-            _value,
-            validTo,
-            previousChange
-        );
+        emit DIDAttributeChanged(msg.sender, _name, _value, validTo, previousChange);
     }
 
     /**
@@ -588,21 +587,21 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @param _name The attribute name to revoke.
      * @param _value The attribute value to match for revocation.
      */
-    function revokeAttribute(bytes32 _name, bytes calldata _value) external override {
+    function revokeAttribute(bytes32 _name, bytes calldata _value) external override whenNotPaused {
         DIDStorage storage s = _getDIDStorage();
-        
+
         _requireActiveDID(msg.sender);
 
         // Verify attribute matches
         bytes32 storedHash = keccak256(s.attributes[msg.sender][_name]);
         bytes32 providedHash = keccak256(_value);
-        
+
         if (storedHash != providedHash) {
             revert AxiomTypesV2.OperationNotPermitted();
         }
 
         s.attributeValidity[msg.sender][_name] = 0;
-        
+
         uint256 previousChange = s.changed[msg.sender];
         s.changed[msg.sender] = block.number;
 
@@ -627,28 +626,37 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @return isValid True if the signature is valid.
      * @return signer The address that signed the message.
      */
-    function verifySignature(
-        address _identity,
-        bytes32 _hash,
-        bytes calldata _signature
-    ) external view override returns (bool isValid, address signer) {
+    function verifySignature(address _identity, bytes32 _hash, bytes calldata _signature)
+        external
+        view
+        override
+        returns (bool isValid, address signer)
+    {
         DIDStorage storage s = _getDIDStorage();
-        
+
         // Recover signer from signature
         bytes32 ethSignedHash = _hash.toEthSignedMessageHash();
-        signer = ethSignedHash.recover(_signature);
-        
+        ECDSA.RecoverError error;
+        (signer, error,) = ECDSA.tryRecoverCalldata(ethSignedHash, _signature);
+        if (error != ECDSA.RecoverError.NoError) return (false, address(0));
+
         // Check if signer is the identity itself
-        if (signer == _identity && s.identities[_identity].isActive) {
+        AxiomTypesV2.DIDIdentity storage identity = s.identities[_identity];
+        if (
+            signer == _identity && identity.isActive
+                && (identity.validUntil == 0 || identity.validUntil > block.timestamp)
+        ) {
             return (true, signer);
         }
-        
+
         // Check if signer is a valid delegate
-        if (_isDelegateActive(s, _identity, DELEGATE_TYPE_SIG_AUTH, signer) ||
-            _isDelegateActive(s, _identity, DELEGATE_TYPE_AXIOM_REG, signer)) {
+        if (
+            _isDelegateActive(s, _identity, DELEGATE_TYPE_SIG_AUTH, signer)
+                || _isDelegateActive(s, _identity, DELEGATE_TYPE_AXIOM_REG, signer)
+        ) {
             return (true, signer);
         }
-        
+
         return (false, signer);
     }
 
@@ -671,18 +679,18 @@ contract AxiomDIDRegistry is IAxiomDID {
      */
     function _requireActiveDID(address _user) internal view {
         DIDStorage storage s = _getDIDStorage();
-        
+
         AxiomTypesV2.DIDIdentity storage identity = s.identities[_user];
-        
+
         if (bytes(identity.did).length == 0) {
             revert AxiomTypesV2.DIDNotFound(_user);
         }
-        
+
         if (!identity.isActive) {
             revert AxiomTypesV2.DIDRevoked(_user);
         }
-        
-        if (identity.validUntil > 0 && identity.validUntil < block.timestamp) {
+
+        if (identity.validUntil > 0 && identity.validUntil <= block.timestamp) {
             revert AxiomTypesV2.DIDExpired(_user, identity.validUntil);
         }
     }
@@ -715,15 +723,13 @@ contract AxiomDIDRegistry is IAxiomDID {
      * @return value Attribute value
      * @return validTo Validity timestamp
      */
-    function getAttribute(address _identity, bytes32 _name) 
-        external view 
-        returns (bytes memory value, uint256 validTo) 
+    function getAttribute(address _identity, bytes32 _name)
+        external
+        view
+        returns (bytes memory value, uint256 validTo)
     {
         DIDStorage storage s = _getDIDStorage();
-        return (
-            s.attributes[_identity][_name],
-            s.attributeValidity[_identity][_name]
-        );
+        return (s.attributes[_identity][_name], s.attributeValidity[_identity][_name]);
     }
 
     /**

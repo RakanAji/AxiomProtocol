@@ -13,20 +13,14 @@ interface IAxiomIdentity {
      * @param _name Display name for the identity
      * @param _proofURI Link to identity proof document
      */
-    function registerIdentity(
-        string calldata _name,
-        string calldata _proofURI
-    ) external;
+    function registerIdentity(string calldata _name, string calldata _proofURI) external;
 
     /**
      * @notice Update existing identity
      * @param _name New display name
      * @param _proofURI New proof URI
      */
-    function updateIdentity(
-        string calldata _name,
-        string calldata _proofURI
-    ) external;
+    function updateIdentity(string calldata _name, string calldata _proofURI) external;
 
     /**
      * @notice Verify an identity (Operator only)
@@ -45,8 +39,7 @@ interface IAxiomIdentity {
      * @param _user Address to resolve
      * @return info Identity information
      */
-    function resolveIdentity(address _user) 
-        external view returns (AxiomTypes.IdentityInfo memory info);
+    function resolveIdentity(address _user) external view returns (AxiomTypes.IdentityInfo memory info);
 
     /**
      * @notice Check if identity is verified

@@ -52,8 +52,7 @@ library Pairing {
 
     /// @dev Prime field modulus p for BN254
     ///      All G1 coordinates live in F_p = {0, 1, ..., p-1}
-    uint256 internal constant PRIME_Q =
-        21888242871839275222246405745257275088696311157297823662689037894645226208583;
+    uint256 internal constant PRIME_Q = 21888242871839275222246405745257275088696311157297823662689037894645226208583;
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                          G1 OPERATIONS
@@ -145,10 +144,7 @@ library Pairing {
      * @param p2 Array of G2 points (same length as p1)
      * @return True if the pairing equation holds
      */
-    function pairing(
-        G1Point[] memory p1,
-        G2Point[] memory p2
-    ) internal view returns (bool) {
+    function pairing(G1Point[] memory p1, G2Point[] memory p2) internal view returns (bool) {
         require(p1.length == p2.length, "Pairing: unequal lengths");
 
         uint256 elements = p1.length;
@@ -175,7 +171,7 @@ library Pairing {
             success := staticcall(
                 sub(gas(), 2000),
                 8,
-                add(input, 0x20),    // skip array length prefix
+                add(input, 0x20), // skip array length prefix
                 mul(inputSize, 0x20), // total bytes = elements * 6 * 32
                 out,
                 0x20
@@ -233,10 +229,11 @@ library Pairing {
  *      A forger cannot produce valid (A, B, C) without knowing the witnesses
  *      because they'd need to solve the discrete log problem.
  *
- *      Expected public inputs for this circuit:
- *        - input[0]: commitment  (hash of address + secret + nullifier)
- *        - input[1]: nullifierHash (hash of nullifier + contentHash)
- *        - input[2]: contentHash (SHA-256 of the content)
+ *      Expected public inputs for this circuit are three field elements:
+ *        - input[0]: H(domain, purpose, claimant, "commitment", commitment)
+ *        - input[1]: H(domain, purpose, claimant, "nullifier", nullifierHash)
+ *        - input[2]: H(domain, purpose, claimant, "content", contentHash)
+ *      The circuit must reproduce the exact AxiomPrivacyFacet transform.
  */
 contract Groth16Verifier {
     using Pairing for *;
@@ -258,7 +255,7 @@ contract Groth16Verifier {
     function _alpha1() internal pure returns (Pairing.G1Point memory) {
         return Pairing.G1Point(
             1, // G1 generator x-coordinate
-            2  // G1 generator y-coordinate
+            2 // G1 generator y-coordinate
         );
     }
 
@@ -312,7 +309,7 @@ contract Groth16Verifier {
      * @dev IC[0] is the base point; IC[1..n] correspond to each public input.
      *      vk_x = IC[0] + input[0]·IC[1] + input[1]·IC[2] + input[2]·IC[3]
      *
-     *      For our 3-input circuit (commitment, nullifierHash, contentHash), we need 4 IC points.
+     *      For our 3-input, purpose/caller-bound circuit we need 4 IC points.
      *      These are placeholder G1 generator points.
      */
     function _IC(uint256 index) internal pure returns (Pairing.G1Point memory) {
@@ -325,6 +322,9 @@ contract Groth16Verifier {
 
     /// @notice Number of public inputs expected by this circuit
     uint256 public constant NUM_PUBLIC_INPUTS = 3;
+
+    /// @notice False until this file is regenerated from a real trusted setup.
+    bool public constant PRODUCTION_READY = false;
 
     // ═══════════════════════════════════════════════════════════════════════════
     //                          VERIFICATION FUNCTION
@@ -340,7 +340,8 @@ contract Groth16Verifier {
      * @param _pA Proof element A ∈ G1: [x, y] — the prover's first point
      * @param _pB Proof element B ∈ G2: [[x_im, x_re], [y_im, y_re]] — the prover's second point
      * @param _pC Proof element C ∈ G1: [x, y] — the prover's third point
-     * @param _pubSignals Public inputs to the circuit [commitment, nullifierHash, contentHash]
+     * @param _pubSignals Three purpose- and caller-bound field elements derived from
+     *                    commitment, nullifierHash, and contentHash by AxiomPrivacyFacet
      * @return True if the proof is valid
      */
     function verifyProof(
@@ -351,20 +352,14 @@ contract Groth16Verifier {
     ) public view returns (bool) {
         // ── Step 1: Validate Input Count ──
         // The circuit expects exactly NUM_PUBLIC_INPUTS public signals
-        require(
-            _pubSignals.length == NUM_PUBLIC_INPUTS,
-            "Verifier: invalid number of public inputs"
-        );
+        require(_pubSignals.length == NUM_PUBLIC_INPUTS, "Verifier: invalid number of public inputs");
 
         // ── Step 2: Validate Input Field Membership ──
         // All public inputs must be elements of the scalar field (< SNARK_SCALAR_FIELD)
         // This prevents overflow attacks where an attacker could wrap around the field
         uint256 SNARK_SCALAR_FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
         for (uint256 i = 0; i < _pubSignals.length; i++) {
-            require(
-                _pubSignals[i] < SNARK_SCALAR_FIELD,
-                "Verifier: public input exceeds field size"
-            );
+            require(_pubSignals[i] < SNARK_SCALAR_FIELD, "Verifier: public input exceeds field size");
         }
 
         // ── Step 3: Compute Public Input Commitment (vk_x) ──
@@ -375,19 +370,13 @@ contract Groth16Verifier {
         // the trusted setup that corresponds to the i-th wire of the circuit.
         Pairing.G1Point memory vk_x = _IC(0);
         for (uint256 i = 0; i < _pubSignals.length; i++) {
-            vk_x = Pairing.addition(
-                vk_x,
-                Pairing.scalarMul(_IC(i + 1), _pubSignals[i])
-            );
+            vk_x = Pairing.addition(vk_x, Pairing.scalarMul(_IC(i + 1), _pubSignals[i]));
         }
 
         // ── Step 4: Construct Proof Points ──
         // Convert the calldata arrays into structured G1/G2 points
         Pairing.G1Point memory pA = Pairing.G1Point(_pA[0], _pA[1]);
-        Pairing.G2Point memory pB = Pairing.G2Point(
-            [_pB[0][0], _pB[0][1]],
-            [_pB[1][0], _pB[1][1]]
-        );
+        Pairing.G2Point memory pB = Pairing.G2Point([_pB[0][0], _pB[0][1]], [_pB[1][0], _pB[1][1]]);
         Pairing.G1Point memory pC = Pairing.G1Point(_pC[0], _pC[1]);
 
         // ── Step 5: Pairing Check ──

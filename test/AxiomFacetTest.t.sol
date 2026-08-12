@@ -14,9 +14,9 @@ import {AxiomDIDRegistry} from "../src/core/AxiomDIDRegistry.sol";
 import {AxiomLicenseFacet} from "../src/core/AxiomLicenseFacet.sol";
 import {AxiomDisputeFacet} from "../src/core/AxiomDisputeFacet.sol";
 import {AxiomPrivacyFacet} from "../src/core/AxiomPrivacyFacet.sol";
-import {AxiomStorage} from "../src/storage/AxiomStorage.sol";
 import {AxiomFacets} from "../src/interfaces/AxiomFacets.sol";
 import {AxiomTypesV2} from "../src/libraries/AxiomTypesV2.sol";
+import {AxiomSelectorManifest} from "../script/AxiomSelectorManifest.sol";
 
 // ─── Mock ERC-20 Token for Payment & Staking Tests ────────────────────────
 contract MockERC20 is IERC20 {
@@ -70,50 +70,20 @@ contract MockArbitrator {
     }
 
     function appeal(uint256, bytes calldata) external payable {}
-    function appealCost(uint256, bytes calldata) external pure returns (uint256) { return 0; }
-    function appealPeriod(uint256) external pure returns (uint256, uint256) { return (0, 0); }
+
+    function appealCost(uint256, bytes calldata) external pure returns (uint256) {
+        return 0;
+    }
+
+    function appealPeriod(uint256) external pure returns (uint256, uint256) {
+        return (0, 0);
+    }
 
     // Called by the proxy to rule on a dispute
     function callRule(uint256 _externalId, uint256 _ruling) external {
         // Call rule on the axiom proxy as the arbitrator
-        (bool ok,) = axiomProxy.call(
-            abi.encodeWithSignature("rule(uint256,uint256)", _externalId, _ruling)
-        );
+        (bool ok,) = axiomProxy.call(abi.encodeWithSignature("rule(uint256,uint256)", _externalId, _ruling));
         require(ok, "rule failed");
-    }
-}
-
-// ─── Test Config Facet to set proxy storage via delegatecall ───────────
-contract TestConfigFacet {
-    function setStakeConfigForTest(
-        uint256 _minStake,
-        uint256 _minAppealStake,
-        address _stakeToken,
-        uint16 _protocolFeeBps,
-        uint16 _rewardBps,
-        uint16 _slashBps,
-        uint40 _responsePeriod,
-        uint40 _evidencePeriod,
-        uint40 _appealPeriod
-    ) external {
-        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        s.stakeConfig = AxiomTypesV2.StakeConfig({
-            minStakeAmount: _minStake,
-            minAppealStake: _minAppealStake,
-            stakeToken: _stakeToken,
-            protocolFeeBps: _protocolFeeBps,
-            rewardBps: _rewardBps,
-            slashBps: _slashBps,
-            responsePeriod: _responsePeriod,
-            evidencePeriod: _evidencePeriod,
-            appealPeriod: _appealPeriod
-        });
-    }
-
-    function approveArbitratorForTest(address _arbitrator) external {
-        AxiomStorage.Storage storage s = AxiomStorage.getStorage();
-        s.approvedArbitrators[_arbitrator] = true;
-        s.arbitratorList.push(_arbitrator);
     }
 }
 
@@ -166,155 +136,14 @@ contract AxiomFacetTest is Test {
         AxiomDisputeFacet disFacet = new AxiomDisputeFacet();
         AxiomPrivacyFacet priFacet = new AxiomPrivacyFacet();
 
-        // Wire Registry (7)
-        bytes4[] memory sel = new bytes4[](7);
-        sel[0] = AxiomRegistry.register.selector;
-        sel[1] = AxiomRegistry.batchRegister.selector;
-        sel[2] = AxiomRegistry.revoke.selector;
-        sel[3] = AxiomRegistry.verify.selector;
-        sel[4] = AxiomRegistry.getRecord.selector;
-        sel[5] = AxiomRegistry.getRecordsByIssuer.selector;
-        sel[6] = AxiomRegistry.getTotalRecords.selector;
-        router.addFacetSelectors(address(regFacet), sel);
-
-        // Wire Treasury (10)
-        sel = new bytes4[](10);
-        sel[0] = AxiomTreasury.setBaseFee.selector;
-        sel[1] = AxiomTreasury.setEnterpriseRate.selector;
-        sel[2] = AxiomTreasury.grantEnterpriseStatus.selector;
-        sel[3] = AxiomTreasury.revokeEnterpriseStatus.selector;
-        sel[4] = AxiomTreasury.withdraw.selector;
-        sel[5] = AxiomTreasury.setTreasuryWallet.selector;
-        sel[6] = AxiomTreasury.getFee.selector;
-        sel[7] = AxiomTreasury.getBaseFee.selector;
-        sel[8] = AxiomTreasury.getTotalFeesCollected.selector;
-        sel[9] = AxiomTreasury.isEnterpriseUser.selector;
-        router.addFacetSelectors(address(treFacet), sel);
-
-        // Wire Identity (7)
-        sel = new bytes4[](7);
-        sel[0] = AxiomIdentity.registerIdentity.selector;
-        sel[1] = AxiomIdentity.updateIdentity.selector;
-        sel[2] = AxiomIdentity.verifyIdentity.selector;
-        sel[3] = AxiomIdentity.revokeVerification.selector;
-        sel[4] = AxiomIdentity.resolveIdentity.selector;
-        sel[5] = AxiomIdentity.resolveByName.selector;
-        sel[6] = AxiomIdentity.isIdentityVerified.selector;
-        router.addFacetSelectors(address(idFacet), sel);
-
-        // Wire Access (6)
-        sel = new bytes4[](6);
-        sel[0] = AxiomAccess.banAddress.selector;
-        sel[1] = AxiomAccess.unbanAddress.selector;
-        sel[2] = AxiomAccess.isBanned.selector;
-        sel[3] = AxiomAccess.disputeContent.selector;
-        sel[4] = AxiomAccess.setRateLimit.selector;
-        sel[5] = AxiomAccess.setMaxBatchSize.selector;
-        router.addFacetSelectors(address(acFacet), sel);
-
-        // Wire DID (19)
-        sel = new bytes4[](19);
-        sel[0] = AxiomDIDRegistry.registerDID.selector;
-        sel[1] = AxiomDIDRegistry.updateDIDDocument.selector;
-        sel[2] = AxiomDIDRegistry.setServiceEndpoint.selector;
-        sel[3] = AxiomDIDRegistry.revokeDID.selector;
-        sel[4] = AxiomDIDRegistry.addDelegate.selector;
-        sel[5] = AxiomDIDRegistry.revokeDelegate.selector;
-        sel[6] = AxiomDIDRegistry.validDelegate.selector;
-        sel[7] = AxiomDIDRegistry.getDelegates.selector;
-        sel[8] = AxiomDIDRegistry.setVerificationLevel.selector;
-        sel[9] = AxiomDIDRegistry.getVerificationLevel.selector;
-        sel[10] = AxiomDIDRegistry.meetsVerificationLevel.selector;
-        sel[11] = AxiomDIDRegistry.resolveDID.selector;
-        sel[12] = AxiomDIDRegistry.getIdentity.selector;
-        sel[13] = AxiomDIDRegistry.hasDID.selector;
-        sel[14] = AxiomDIDRegistry.isDIDActive.selector;
-        sel[15] = AxiomDIDRegistry.getDIDString.selector;
-        sel[16] = AxiomDIDRegistry.setAttribute.selector;
-        sel[17] = AxiomDIDRegistry.revokeAttribute.selector;
-        sel[18] = AxiomDIDRegistry.verifySignature.selector;
-        router.addFacetSelectors(address(didFacet), sel);
-
-        // Wire License (32)
-        sel = new bytes4[](32);
-        sel[0] = AxiomLicenseFacet.createLicense.selector;
-        sel[1] = AxiomLicenseFacet.updateLicense.selector;
-        sel[2] = AxiomLicenseFacet.deactivateLicense.selector;
-        sel[3] = AxiomLicenseFacet.purchaseLicense.selector;
-        sel[4] = AxiomLicenseFacet.purchaseLicenseFor.selector;
-        sel[5] = AxiomLicenseFacet.balanceOf.selector;
-        sel[6] = AxiomLicenseFacet.ownerOf.selector;
-        sel[7] = bytes4(keccak256("transferFrom(address,address,uint256)"));
-        sel[8] = bytes4(keccak256("safeTransferFrom(address,address,uint256)"));
-        sel[9] = bytes4(keccak256("safeTransferFrom(address,address,uint256,bytes)"));
-        sel[10] = AxiomLicenseFacet.approve.selector;
-        sel[11] = AxiomLicenseFacet.setApprovalForAll.selector;
-        sel[12] = AxiomLicenseFacet.getApproved.selector;
-        sel[13] = AxiomLicenseFacet.isApprovedForAll.selector;
-        sel[14] = AxiomLicenseFacet.name.selector;
-        sel[15] = AxiomLicenseFacet.symbol.selector;
-        sel[16] = AxiomLicenseFacet.tokenURI.selector;
-        sel[17] = AxiomLicenseFacet.royaltyInfo.selector;
-        sel[18] = AxiomLicenseFacet.setRoyaltySplit.selector;
-        sel[19] = AxiomLicenseFacet.getLicense.selector;
-        sel[20] = AxiomLicenseFacet.getLicensesByRecord.selector;
-        sel[21] = AxiomLicenseFacet.isLicenseValid.selector;
-        sel[22] = AxiomLicenseFacet.getRoyaltySplit.selector;
-        sel[23] = AxiomLicenseFacet.supportsInterface.selector;
-        sel[24] = AxiomLicenseFacet.hasValidLicense.selector;
-        sel[25] = AxiomLicenseFacet.claimRoyalties.selector;
-        sel[26] = AxiomLicenseFacet.claimRoyaltiesToken.selector;
-        sel[27] = AxiomLicenseFacet.pendingRoyalties.selector;
-        sel[28] = AxiomLicenseFacet.createSublicense.selector;
-        sel[29] = AxiomLicenseFacet.purchaseSublicense.selector;
-        sel[30] = AxiomLicenseFacet.setTerritoryRestrictions.selector;
-        sel[31] = AxiomLicenseFacet.getLicensesByOwner.selector;
-        router.addFacetSelectors(address(licFacet), sel);
-
-        // Wire Dispute (20)
-        sel = new bytes4[](20);
-        sel[0] = AxiomDisputeFacet.initiateDispute.selector;
-        sel[1] = AxiomDisputeFacet.initiateDisputeWithToken.selector;
-        sel[2] = AxiomDisputeFacet.respondToDispute.selector;
-        sel[3] = AxiomDisputeFacet.submitEvidence.selector;
-        sel[4] = AxiomDisputeFacet.escalateToArbitration.selector;
-        sel[5] = AxiomDisputeFacet.resolveByTimeout.selector;
-        sel[6] = AxiomDisputeFacet.claimStake.selector;
-        sel[7] = AxiomDisputeFacet.getDispute.selector;
-        sel[8] = AxiomDisputeFacet.getDisputesByRecord.selector;
-        sel[9] = AxiomDisputeFacet.hasActiveDispute.selector;
-        sel[10] = AxiomDisputeFacet.getStakeConfig.selector;
-        sel[11] = AxiomDisputeFacet.getApprovedArbitrators.selector;
-        sel[12] = AxiomDisputeFacet.isArbitratorApproved.selector;
-        sel[13] = AxiomDisputeFacet.settleDispute.selector;
-        sel[14] = AxiomDisputeFacet.getDisputesByChallenger.selector;
-        sel[15] = AxiomDisputeFacet.getActiveDisputes.selector;
-        sel[16] = AxiomDisputeFacet.getMinimumStake.selector;
-        sel[17] = AxiomDisputeFacet.appeal.selector;
-        sel[18] = AxiomDisputeFacet.getAppealDeadline.selector;
-        sel[19] = AxiomDisputeFacet.rule.selector;
-        router.addFacetSelectors(address(disFacet), sel);
-
-        // Wire Privacy (10)
-        sel = new bytes4[](10);
-        sel[0] = AxiomPrivacyFacet.privateRegister.selector;
-        sel[1] = AxiomPrivacyFacet.verifyOwnership.selector;
-        sel[2] = AxiomPrivacyFacet.requestErasure.selector;
-        sel[3] = AxiomPrivacyFacet.confirmErasure.selector;
-        sel[4] = AxiomPrivacyFacet.getPrivateRecord.selector;
-        sel[5] = AxiomPrivacyFacet.contentExists.selector;
-        sel[6] = AxiomPrivacyFacet.nullifierUsed.selector;
-        sel[7] = AxiomPrivacyFacet.isMetadataDeleted.selector;
-        sel[8] = AxiomPrivacyFacet.getGDPRRequest.selector;
-        sel[9] = AxiomPrivacyFacet.getRecordsByCommitment.selector;
-        router.addFacetSelectors(address(priFacet), sel);
-
-        // Wire TestConfigFacet (2) - for setting stake config and approving arbitrators through proxy
-        TestConfigFacet cfgFacet = new TestConfigFacet();
-        sel = new bytes4[](2);
-        sel[0] = TestConfigFacet.setStakeConfigForTest.selector;
-        sel[1] = TestConfigFacet.approveArbitratorForTest.selector;
-        router.addFacetSelectors(address(cfgFacet), sel);
+        router.addFacetSelectors(address(regFacet), AxiomSelectorManifest.registrySelectors());
+        router.addFacetSelectors(address(treFacet), AxiomSelectorManifest.treasurySelectors());
+        router.addFacetSelectors(address(idFacet), AxiomSelectorManifest.identitySelectors());
+        router.addFacetSelectors(address(acFacet), AxiomSelectorManifest.accessSelectors());
+        router.addFacetSelectors(address(didFacet), AxiomSelectorManifest.didSelectors());
+        router.addFacetSelectors(address(licFacet), AxiomSelectorManifest.licenseSelectors());
+        router.addFacetSelectors(address(disFacet), AxiomSelectorManifest.disputeSelectors());
+        router.addFacetSelectors(address(priFacet), AxiomSelectorManifest.privacySelectors());
 
         // Grant VERIFIER_ROLE to verifier
         router.grantRole(VERIFIER_ROLE, verifier);
@@ -324,32 +153,12 @@ contract AxiomFacetTest is Test {
         vm.deal(bob, 100 ether);
         vm.deal(charlie, 100 ether);
 
-        // Configure stake config through proxy
-        (bool ok,) = address(diamond).call(
-            abi.encodeWithSelector(
-                TestConfigFacet.setStakeConfigForTest.selector,
-                0.1 ether,  // minStakeAmount
-                0.2 ether,  // minAppealStake
-                address(0),  // stakeToken (ETH)
-                500,         // protocolFeeBps (5%)
-                8000,        // rewardBps (80%)
-                5000,        // slashBps (50%)
-                uint40(3 days),    // responsePeriod
-                uint40(7 days),    // evidencePeriod
-                uint40(5 days)     // appealPeriod
-            )
-        );
-        require(ok, "setStakeConfig failed");
+        // Configure disputes through production admin entry points.
+        diamond.configureStakeConfig(_stakeConfig(address(0)));
 
-        // Approve mock arbitrator through proxy
+        // Approve mock arbitrator through the production admin entry point.
         mockArbitrator.setProxy(address(diamond));
-        (ok,) = address(diamond).call(
-            abi.encodeWithSelector(
-                TestConfigFacet.approveArbitratorForTest.selector,
-                address(mockArbitrator)
-            )
-        );
-        require(ok, "approveArbitrator failed");
+        diamond.setArbitrator(address(mockArbitrator), true);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -360,6 +169,20 @@ contract AxiomFacetTest is Test {
         bytes32 hash = keccak256(abi.encodePacked("content", user, block.timestamp));
         vm.prank(user);
         return diamond.register{value: 0.01 ether}(hash, "ipfs://metadata");
+    }
+
+    function _stakeConfig(address stakeToken) internal pure returns (AxiomTypesV2.StakeConfig memory) {
+        return AxiomTypesV2.StakeConfig({
+            minStakeAmount: 0.1 ether,
+            minAppealStake: 0.2 ether,
+            stakeToken: stakeToken,
+            protocolFeeBps: 500,
+            rewardBps: 0,
+            slashBps: 0,
+            responsePeriod: 3 days,
+            evidencePeriod: 7 days,
+            appealPeriod: 5 days
+        });
     }
 
     function _registerDID(address user, string memory did) internal {
@@ -374,10 +197,10 @@ contract AxiomFacetTest is Test {
             AxiomTypesV2.LicenseType.CC_BY,
             price,
             address(0), // ETH
-            500,        // 5% royalty
-            0,          // no expiry
-            false,      // non-exclusive
-            false,      // non-sublicensable
+            500, // 5% royalty
+            0, // no expiry
+            false, // non-exclusive
+            false, // non-sublicensable
             ""
         );
     }
@@ -563,8 +386,7 @@ contract AxiomFacetTest is Test {
 
         vm.prank(alice);
         uint256 licenseId = diamond.createLicense(
-            recordId, AxiomTypesV2.LicenseType.CC_BY, 1 ether,
-            address(0), 500, 0, false, false, ""
+            recordId, AxiomTypesV2.LicenseType.CC_BY, 1 ether, address(0), 500, 0, false, false, ""
         );
 
         assertEq(licenseId, 1);
@@ -580,8 +402,15 @@ contract AxiomFacetTest is Test {
         vm.prank(alice);
         vm.expectRevert();
         diamond.createLicense(
-            recordId, AxiomTypesV2.LicenseType.CC_BY, 1 ether,
-            address(0), 10001, 0, false, false, "" // >10000 bps
+            recordId,
+            AxiomTypesV2.LicenseType.CC_BY,
+            1 ether,
+            address(0),
+            10001,
+            0,
+            false,
+            false,
+            "" // >10000 bps
         );
     }
 
@@ -664,8 +493,15 @@ contract AxiomFacetTest is Test {
 
         vm.prank(alice);
         uint256 licenseId = diamond.createLicense(
-            recordId, AxiomTypesV2.LicenseType.CC_BY, 1 ether,
-            address(0), 500, 0, true, false, "" // exclusive
+            recordId,
+            AxiomTypesV2.LicenseType.CC_BY,
+            1 ether,
+            address(0),
+            500,
+            0,
+            true,
+            false,
+            "" // exclusive
         );
 
         vm.prank(bob);
@@ -788,9 +624,11 @@ contract AxiomFacetTest is Test {
         // directly and never delegates to the LicenseFacet.
         // The Router's supportsInterface returns true for ERC165 and AccessControl
         // but false for ERC721 — this is expected Diamond behavior.
-        (bool ok, bytes memory data) = address(diamond).call(
-            abi.encodeWithSignature("supportsInterface(bytes4)", bytes4(0x01ffc9a7)) // ERC165
-        );
+        (bool ok, bytes memory data) =
+            address(diamond)
+                .call(
+                    abi.encodeWithSignature("supportsInterface(bytes4)", bytes4(0x01ffc9a7)) // ERC165
+                );
         assertTrue(ok);
         // Router itself supports ERC-165
         assertTrue(abi.decode(data, (bool)));
@@ -803,9 +641,8 @@ contract AxiomFacetTest is Test {
         vm.prank(bob);
         uint256 tokenId = diamond.purchaseLicense{value: 1 ether}(licenseId, 0);
 
-        (bool ok, bytes memory data) = address(diamond).call(
-            abi.encodeWithSignature("isLicenseValid(uint256)", tokenId)
-        );
+        (bool ok, bytes memory data) =
+            address(diamond).call(abi.encodeWithSignature("isLicenseValid(uint256)", tokenId));
         assertTrue(ok);
         assertTrue(abi.decode(data, (bool)));
     }
@@ -1016,6 +853,37 @@ contract AxiomFacetTest is Test {
         assertEq(cfg.protocolFeeBps, 500);
     }
 
+    function test_Dispute_ConfigurationIsAdminOnlyAndIdempotent() public {
+        AxiomTypesV2.StakeConfig memory config = _stakeConfig(address(0));
+
+        vm.prank(bob);
+        vm.expectRevert("DisputeFacet: missing admin role");
+        diamond.configureStakeConfig(config);
+
+        diamond.configureStakeConfig(config);
+        AxiomTypesV2.StakeConfig memory actual = diamond.getStakeConfig();
+        assertEq(keccak256(abi.encode(actual)), keccak256(abi.encode(config)));
+
+        diamond.configureStakeConfig(config);
+        actual = diamond.getStakeConfig();
+        assertEq(keccak256(abi.encode(actual)), keccak256(abi.encode(config)));
+    }
+
+    function test_Dispute_ArbitratorConfigurationIsAdminOnlyAndIdempotent() public {
+        vm.prank(bob);
+        vm.expectRevert("DisputeFacet: missing admin role");
+        diamond.setArbitrator(address(mockArbitrator), false);
+
+        diamond.setArbitrator(address(mockArbitrator), true);
+        diamond.setArbitrator(address(mockArbitrator), true);
+        address[] memory arbitrators = diamond.getApprovedArbitrators();
+        assertEq(arbitrators.length, 1);
+        assertEq(arbitrators[0], address(mockArbitrator));
+
+        diamond.setArbitrator(address(mockArbitrator), false);
+        assertFalse(diamond.isArbitratorApproved(address(mockArbitrator)));
+    }
+
     function test_Dispute_GetDispute() public {
         bytes32 recordId = _registerContent(alice);
 
@@ -1048,18 +916,34 @@ contract AxiomFacetTest is Test {
     // ═══════════════════════════════════════════════════════════════════════
 
     function test_Dispute_SettleDispute() public {
-        bytes32 recordId = _registerContent(alice);
+        uint256 ownerKey = 0xA11CE;
+        uint256 challengerKey = 0xB0B;
+        address owner = vm.addr(ownerKey);
+        address challenger = vm.addr(challengerKey);
+        vm.deal(owner, 10 ether);
+        vm.deal(challenger, 10 ether);
+        bytes32 recordId = _registerContent(owner);
 
-        vm.prank(bob);
+        vm.prank(challenger);
         bytes32 disputeId = diamond.initiateDispute{value: 0.5 ether}(
             recordId, AxiomTypesV2.DisputeReason.COPYRIGHT_INFRINGEMENT, "ipfs://evidence"
         );
 
-        // Settle with 60/40 split
-        diamond.settleDispute(disputeId, 6000, "", "");
+        uint16 challengerShare = 6_000;
+        bytes32 digest = diamond.settlementDigest(disputeId, challengerShare);
+        (uint8 ownerV, bytes32 ownerR, bytes32 ownerS) = vm.sign(ownerKey, digest);
+        (uint8 challengerV, bytes32 challengerR, bytes32 challengerS) = vm.sign(challengerKey, digest);
+
+        diamond.settleDispute(
+            disputeId,
+            challengerShare,
+            abi.encodePacked(ownerR, ownerS, ownerV),
+            abi.encodePacked(challengerR, challengerS, challengerV)
+        );
 
         AxiomTypesV2.Dispute memory d = diamond.getDispute(disputeId);
         assertEq(uint8(d.status), uint8(AxiomTypesV2.DisputeStatus.SETTLED));
+        assertEq(d.stakeAmount, 0);
     }
 
     function test_Dispute_SettleAlreadyResolved_Reverts() public {
@@ -1091,15 +975,28 @@ contract AxiomFacetTest is Test {
         assertEq(disputes.length, 1);
     }
 
-    function test_Dispute_GetActiveDisputes() public view {
-        bytes32[] memory disputes = diamond.getActiveDisputes(0, 10);
-        assertEq(disputes.length, 0); // Stub returns empty
+    function test_Dispute_GetActiveDisputesTracksLifecycle() public {
+        bytes32 recordId = _registerContent(alice);
+
+        vm.prank(bob);
+        bytes32 disputeId = diamond.initiateDispute{value: 0.5 ether}(
+            recordId, AxiomTypesV2.DisputeReason.COPYRIGHT_INFRINGEMENT, "ipfs://evidence"
+        );
+
+        bytes32[] memory active = diamond.getActiveDisputes(0, 10);
+        assertEq(active.length, 1);
+        assertEq(active[0], disputeId);
+        assertEq(diamond.getActiveDisputes(1, 10).length, 0);
+
+        vm.warp(block.timestamp + 3 days + 1);
+        diamond.resolveByTimeout(disputeId);
+        assertEq(diamond.getActiveDisputes(0, 10).length, 0);
     }
 
     function test_Dispute_GetMinimumStake() public {
         bytes32 recordId = _registerContent(alice);
         uint256 minStake = diamond.getMinimumStake(recordId);
-        assertEq(minStake, 0.1 ether); // Configured via TestConfigFacet
+        assertEq(minStake, 0.1 ether); // Configured through the production admin API
     }
 
     function test_Dispute_DoubleClaim_ReturnsZero() public {
@@ -1190,8 +1087,7 @@ contract AxiomFacetTest is Test {
 
         vm.prank(alice);
         uint256 licenseId = diamond.createLicense(
-            recordId, AxiomTypesV2.LicenseType.COMMERCIAL_SINGLE, 10 ether,
-            address(mockToken), 500, 0, false, false, ""
+            recordId, AxiomTypesV2.LicenseType.COMMERCIAL_SINGLE, 10 ether, address(mockToken), 500, 0, false, false, ""
         );
 
         // Bob approves and purchases with ERC20
@@ -1228,37 +1124,43 @@ contract AxiomFacetTest is Test {
         assertEq(uint8(lt), uint8(AxiomTypesV2.LicenseType.NONE));
     }
 
-    function test_License_ClaimRoyalties_ReturnsZero() public {
+    function test_License_GetLicensesByOwnerTracksTransfers() public {
+        assertEq(diamond.getLicensesByOwner(bob).length, 0);
+
         bytes32 recordId = _registerContent(alice);
-        uint256 claimed = diamond.claimRoyalties(recordId);
-        assertEq(claimed, 0);
+        uint256 licenseId = _createLicenseETH(recordId, alice, 0);
+
+        vm.prank(bob);
+        uint256 tokenId = diamond.purchaseLicense(licenseId, 0);
+
+        uint256[] memory bobTokens = diamond.getLicensesByOwner(bob);
+        assertEq(bobTokens.length, 1);
+        assertEq(bobTokens[0], tokenId);
+
+        vm.prank(bob);
+        diamond.transferFrom(bob, charlie, tokenId);
+
+        assertEq(diamond.getLicensesByOwner(bob).length, 0);
+        uint256[] memory charlieTokens = diamond.getLicensesByOwner(charlie);
+        assertEq(charlieTokens.length, 1);
+        assertEq(charlieTokens[0], tokenId);
     }
 
-    function test_License_ClaimRoyaltiesToken_ReturnsZero() public {
-        bytes32 recordId = _registerContent(alice);
-        uint256 claimed = diamond.claimRoyaltiesToken(recordId, address(mockToken));
-        assertEq(claimed, 0);
-    }
+    function test_License_TreasuryConfigurationIsAdminOnlyNonzeroAndIdempotent() public {
+        assertEq(diamond.getLicenseTreasury(), treasury);
 
-    function test_License_PendingRoyalties_ReturnsZero() public {
-        bytes32 recordId = _registerContent(alice);
-        uint256 pending = diamond.pendingRoyalties(alice, recordId);
-        assertEq(pending, 0);
-    }
+        vm.prank(bob);
+        vm.expectRevert("LicenseFacet: missing admin role");
+        diamond.setLicenseTreasury(charlie);
 
-    function test_License_CreateSublicense_Reverts() public {
-        vm.expectRevert();
-        diamond.createSublicense(1, 1 ether, 30 days);
-    }
+        vm.expectRevert(AxiomTypesV2.ZeroAddress.selector);
+        diamond.setLicenseTreasury(address(0));
 
-    function test_License_PurchaseSublicense_Reverts() public {
-        vm.expectRevert();
-        diamond.purchaseSublicense{value: 1 ether}(1);
-    }
+        diamond.setLicenseTreasury(charlie);
+        assertEq(diamond.getLicenseTreasury(), charlie);
 
-    function test_License_GetLicensesByOwner_Reverts() public {
-        vm.expectRevert();
-        diamond.getLicensesByOwner(alice);
+        diamond.setLicenseTreasury(charlie);
+        assertEq(diamond.getLicenseTreasury(), charlie);
     }
 
     function test_License_CustomTypeRequiresTerms_Reverts() public {
@@ -1267,8 +1169,15 @@ contract AxiomFacetTest is Test {
         vm.prank(alice);
         vm.expectRevert();
         diamond.createLicense(
-            recordId, AxiomTypesV2.LicenseType.CUSTOM, 1 ether,
-            address(0), 500, 0, false, false, "" // empty customTermsURI
+            recordId,
+            AxiomTypesV2.LicenseType.CUSTOM,
+            1 ether,
+            address(0),
+            500,
+            0,
+            false,
+            false,
+            "" // empty customTermsURI
         );
     }
 
@@ -1277,8 +1186,7 @@ contract AxiomFacetTest is Test {
 
         vm.prank(alice);
         uint256 licenseId = diamond.createLicense(
-            recordId, AxiomTypesV2.LicenseType.CUSTOM, 1 ether,
-            address(0), 500, 0, false, false, "ipfs://custom-terms"
+            recordId, AxiomTypesV2.LicenseType.CUSTOM, 1 ether, address(0), 500, 0, false, false, "ipfs://custom-terms"
         );
 
         AxiomTypesV2.License memory lic = diamond.getLicense(licenseId);
@@ -1339,8 +1247,15 @@ contract AxiomFacetTest is Test {
 
         vm.prank(alice);
         uint256 licenseId = diamond.createLicense(
-            recordId, AxiomTypesV2.LicenseType.CC_BY, 1 ether,
-            address(0), 500, uint40(block.timestamp + 365 days), false, false, ""
+            recordId,
+            AxiomTypesV2.LicenseType.CC_BY,
+            1 ether,
+            address(0),
+            500,
+            uint40(block.timestamp + 365 days),
+            false,
+            false,
+            ""
         );
 
         vm.prank(bob);
@@ -1354,8 +1269,15 @@ contract AxiomFacetTest is Test {
 
         vm.prank(alice);
         uint256 licenseId = diamond.createLicense(
-            recordId, AxiomTypesV2.LicenseType.CC_BY, 1 ether,
-            address(0), 500, uint40(block.timestamp + 1 hours), false, false, ""
+            recordId,
+            AxiomTypesV2.LicenseType.CC_BY,
+            1 ether,
+            address(0),
+            500,
+            uint40(block.timestamp + 1 hours),
+            false,
+            false,
+            ""
         );
 
         // Warp past expiry
@@ -1370,10 +1292,8 @@ contract AxiomFacetTest is Test {
         bytes32 recordId = _registerContent(alice);
 
         vm.prank(alice);
-        uint256 licenseId = diamond.createLicense(
-            recordId, AxiomTypesV2.LicenseType.CC0, 0,
-            address(0), 0, 0, false, false, ""
-        );
+        uint256 licenseId =
+            diamond.createLicense(recordId, AxiomTypesV2.LicenseType.CC0, 0, address(0), 0, 0, false, false, "");
 
         vm.prank(bob);
         uint256 tokenId = diamond.purchaseLicense(licenseId, 0);
@@ -1404,18 +1324,7 @@ contract AxiomFacetTest is Test {
     // ═══════════════════════════════════════════════════════════════════════
 
     function test_Dispute_InitiateWithToken() public {
-        // First configure stakeToken to mockToken through TestConfigFacet
-        (bool ok,) = address(diamond).call(
-            abi.encodeWithSelector(
-                TestConfigFacet.setStakeConfigForTest.selector,
-                0.1 ether,
-                0.2 ether,
-                address(mockToken), // ERC20 mode
-                500, 8000, 5000,
-                uint40(3 days), uint40(7 days), uint40(5 days)
-            )
-        );
-        require(ok);
+        diamond.configureStakeConfig(_stakeConfig(address(mockToken)));
 
         bytes32 recordId = _registerContent(alice);
 
@@ -1425,26 +1334,14 @@ contract AxiomFacetTest is Test {
 
         vm.prank(bob);
         bytes32 disputeId = diamond.initiateDisputeWithToken(
-            recordId,
-            AxiomTypesV2.DisputeReason.COPYRIGHT_INFRINGEMENT,
-            "ipfs://evidence",
-            address(mockToken),
-            1 ether
+            recordId, AxiomTypesV2.DisputeReason.COPYRIGHT_INFRINGEMENT, "ipfs://evidence", address(mockToken), 1 ether
         );
 
         assertTrue(disputeId != bytes32(0));
         assertTrue(diamond.hasActiveDispute(recordId));
 
         // Reset stakeConfig to ETH mode
-        (ok,) = address(diamond).call(
-            abi.encodeWithSelector(
-                TestConfigFacet.setStakeConfigForTest.selector,
-                0.1 ether, 0.2 ether, address(0),
-                500, 8000, 5000,
-                uint40(3 days), uint40(7 days), uint40(5 days)
-            )
-        );
-        require(ok);
+        diamond.configureStakeConfig(_stakeConfig(address(0)));
     }
 
     function test_Dispute_InitiateWithToken_WrongToken_Reverts() public {
@@ -1454,11 +1351,7 @@ contract AxiomFacetTest is Test {
         vm.prank(bob);
         vm.expectRevert();
         diamond.initiateDisputeWithToken(
-            recordId,
-            AxiomTypesV2.DisputeReason.COPYRIGHT_INFRINGEMENT,
-            "ipfs://evidence",
-            address(mockToken),
-            1 ether
+            recordId, AxiomTypesV2.DisputeReason.COPYRIGHT_INFRINGEMENT, "ipfs://evidence", address(mockToken), 1 ether
         );
     }
 
@@ -1560,14 +1453,33 @@ contract AxiomFacetTest is Test {
         assertEq(uint8(d.status), uint8(AxiomTypesV2.DisputeStatus.RESOLVED_INVALID));
     }
 
-    function test_Dispute_AppealStub_Reverts() public {
-        vm.expectRevert();
-        diamond.appeal{value: 0.1 ether}(bytes32(uint256(1)), "reason");
-    }
+    function test_Dispute_AppealLifecycle() public {
+        bytes32 recordId = _registerContent(alice);
 
-    function test_Dispute_GetAppealDeadline() public view {
-        uint256 deadline = diamond.getAppealDeadline(bytes32(uint256(1)));
-        assertEq(deadline, 0); // Stub returns 0
+        vm.prank(bob);
+        bytes32 disputeId = diamond.initiateDispute{value: 0.5 ether}(
+            recordId, AxiomTypesV2.DisputeReason.COPYRIGHT_INFRINGEMENT, "ipfs://evidence"
+        );
+
+        vm.prank(alice);
+        diamond.respondToDispute(disputeId, "ipfs://response");
+
+        uint256 arbitrationFee = mockArbitrator.fee();
+        vm.prank(bob);
+        diamond.escalateToArbitration{value: arbitrationFee}(disputeId, address(mockArbitrator));
+        mockArbitrator.callRule(100, 1);
+
+        assertEq(diamond.getAppealDeadline(disputeId), 5 days);
+
+        vm.prank(alice);
+        bytes32 appealId = diamond.appeal{value: 0.2 ether}(disputeId, "ipfs://appeal");
+        assertNotEq(appealId, bytes32(0));
+        assertEq(uint8(diamond.getDispute(disputeId).status), uint8(AxiomTypesV2.DisputeStatus.APPEALED));
+        assertEq(diamond.getAppealDeadline(disputeId), 0);
+
+        mockArbitrator.callRule(100, 2);
+        assertEq(uint8(diamond.getDispute(disputeId).status), uint8(AxiomTypesV2.DisputeStatus.RESOLVED_INVALID));
+        assertEq(diamond.getAppealDeadline(disputeId), 0);
     }
 
     function test_Dispute_EscalateInsufficientFee_Reverts() public {
@@ -1641,8 +1553,10 @@ contract AxiomFacetTest is Test {
         vm.prank(bob);
         diamond.escalateToArbitration{value: arbFee}(disputeId, address(mockArbitrator));
 
-        // Evidence can be submitted during arbitration
+        // Arbitration is a separate terminal evidence phase; additional
+        // evidence is rejected once the case has been handed to the arbiter.
         vm.prank(bob);
+        vm.expectRevert();
         diamond.submitEvidence(disputeId, "ipfs://arbitration-evidence");
     }
 
